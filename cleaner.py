@@ -1,4 +1,5 @@
 import os
+import sys
 import shutil
 import threading
 import tkinter as tk
@@ -7,9 +8,29 @@ import ctypes
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from queue import Queue, Empty
-import time
 from datetime import datetime
+import time
 
+# --- Base64 图标库 (Win11 风格 - 适配浅色主题) ---
+ICONS = {
+    'clean': b'R0lGODlhEAAQAJEAAP///wAAAP///wAAACH5BAEAAAIALAAAAAAQABAAAAIqlI+py+0Po5x00osBTfD2jXHg93Ei+aCmmqKcy7LzC8N0JEN7v/v+QAQAOw==',
+    'box': b'R0lGODlhEAAQAJEAAP///wAAAP///wAAACH5BAEAAAIALAAAAAAQABAAAAIolI+py+0PxhQ0Wnhd1Z3y7g1C95GZaJqmOK5uK88TQtO2HeM41/dBAQA7',
+    'search': b'R0lGODlhEAAQAJEAAP///wAAAP///wAAACH5BAEAAAIALAAAAAAQABAAAAInlI+py+0PjApQsGmv1XD7D3ZiaJbm6aFqymrt8sLwPN90nQ98rwAAOw==',
+    'sys': b'R0lGODlhEAAQAJEAAP///wAAAP///////yH5BAEAAAIALAAAAAAQABAAAAIplI+py+0PopwxUbpuZRfQqGwYMDQeMAxs6z4wLCON8j1vW9vn/P9DAgA7', 
+    'app': b'R0lGODlhEAAQAJEAAP///wAAAP///////yH5BAEAAAIALAAAAAAQABAAAAIolI+py+0PowR0TgrhzTbx7m2Y95GZaPp4GpqmFp3nSlr1rM965/9DCAA7', 
+    'bin': b'R0lGODlhEAAQAJEAAP///wAAAP///////yH5BAEAAAIALAAAAAAQABAAAAIqlI+py+0Po5x00osBTfD2jXHg93Ei+aCmmqKcy7LzC8N0JEN7v/v+QAQAOw=='
+}
+
+def is_admin():
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
+
+def run_as_admin():
+    ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
+
+# --- 核心清理逻辑 ---
 class SystemCleaner:
     def __init__(self):
         self.user_profile = os.environ['USERPROFILE']
@@ -19,65 +40,32 @@ class SystemCleaner:
         self.system_root = os.environ['SystemRoot']
         self.downloads = os.path.join(self.user_profile, "Downloads")
         
-        # 基础清理项 (带分类标签)
         self.base_targets = [
-            {"name": "用户临时文件", "path": self.temp, "cat": "系统垃圾"},
-            {"name": "系统临时文件", "path": os.path.join(self.system_root, "Temp"), "cat": "系统垃圾"},
-            {"name": "预读取文件 (Prefetch)", "path": os.path.join(self.system_root, "Prefetch"), "cat": "系统垃圾"},
-            {"name": "Windows 更新缓存", "path": os.path.join(self.system_root, "SoftwareDistribution", "Download"), "cat": "系统垃圾"},
-            {"name": "错误报告", "path": os.path.join(self.local_appdata, "Microsoft", "Windows", "WER"), "cat": "系统日志"},
+            {"name": "用户临时文件", "path": self.temp, "cat": "系统垃圾", "soft": "Windows"},
+            {"name": "系统临时文件", "path": os.path.join(self.system_root, "Temp"), "cat": "系统垃圾", "soft": "Windows"},
+            {"name": "预读取文件", "path": os.path.join(self.system_root, "Prefetch"), "cat": "系统垃圾", "soft": "Windows"},
+            {"name": "系统更新缓存", "path": os.path.join(self.system_root, "SoftwareDistribution", "Download"), "cat": "系统垃圾", "soft": "Windows Update"},
+            {"name": "错误报告", "path": os.path.join(self.local_appdata, "Microsoft", "Windows", "WER"), "cat": "系统垃圾", "soft": "Error Reporting"},
         ]
-
         self.safe_keywords = ['cache', 'temp', 'log', 'logs', 'dump', 'crashes', 'crashpad', 'shadercache']
-        self.danger_keywords = ['profile', 'save', 'saved', 'backup', 'database', 'user data', 'config']
-        
-        # 软件映射 & 分类推断
+        self.danger_keywords = ['profile', 'save', 'saved', 'backup', 'database', 'user data', 'config', 'cookies']
         self.app_mapping = {
-            'google': ('谷歌 (Google)', '浏览器缓存'),
-            'edge': ('Edge 浏览器', '浏览器缓存'),
-            'microsoft': ('微软 (Microsoft)', '应用缓存'), 
-            'mozilla': ('Firefox', '浏览器缓存'),
-            'brave': ('Brave', '浏览器缓存'),
-            'opera': ('Opera', '浏览器缓存'),
-            'tencent': ('腾讯 (Tencent)', '社交通讯'),
-            'wechat': ('微信 (WeChat)', '社交通讯'),
-            'qq': ('QQ', '社交通讯'),
-            'dingtalk': ('钉钉', '办公软件'),
-            'feishu': ('飞书', '办公软件'),
-            'lark': ('飞书', '办公软件'),
-            'adobe': ('Adobe', '设计工具'),
-            'autodesk': ('Autodesk', '设计工具'),
-            'blender': ('Blender', '设计工具'),
-            'steam': ('Steam', '游戏平台'),
-            'epic': ('Epic Games', '游戏平台'),
-            'vscode': ('VS Code', '开发工具'),
-            'jetbrains': ('JetBrains', '开发工具'),
-            'python': ('Python', '开发工具'),
-            'pip': ('Pip Cache', '开发工具'),
-            'nvidia': ('NVIDIA', '驱动缓存'),
-            'amd': ('AMD', '驱动缓存'),
+            'google': ('浏览器缓存', 'Google Chrome'), 'chrome': ('浏览器缓存', 'Google Chrome'), 'edge': ('浏览器缓存', 'Edge'),
+            'microsoft': ('应用缓存', 'Microsoft Apps'), 'mozilla': ('浏览器缓存', 'Firefox'),
+            'tencent': ('社交通讯', '腾讯软件'), 'wechat': ('社交通讯', '微信 WeChat'), 'qq': ('社交通讯', 'QQ'),
+            'dingtalk': ('办公软件', '钉钉'), 'feishu': ('办公软件', '飞书'),
+            'adobe': ('设计工具', 'Adobe'), 'steam': ('游戏平台', 'Steam'), 'vscode': ('开发工具', 'VS Code'),
+            'nvidia': ('驱动缓存', 'NVIDIA'), 'amd': ('驱动缓存', 'AMD'), 'obs': ('视频工具', 'OBS')
         }
 
-    def infer_category(self, name, dir_path):
-        """推断分类"""
+    def infer_info(self, name, dir_path):
         name_lower = name.lower()
-        path_lower = dir_path.lower()
-        
-        # 1. 优先查表
-        if name_lower in self.app_mapping:
-            return self.app_mapping[name_lower] # 返回 (ReadableName, Category)
-            
-        # 2. 关键词推断
-        if 'log' in path_lower or 'dump' in path_lower or 'crash' in path_lower:
-            return (name, "日志与报错")
-        
-        # 3. 默认
-        # 尝试查找是否包含映射表中的键
-        for key, (readable, cat) in self.app_mapping.items():
+        cat, soft = "其他应用", name
+        for key, (c, s) in self.app_mapping.items():
             if key in name_lower:
-                return (f"[{readable}] {name}", cat)
-                
-        return (name, "应用缓存")
+                cat, soft = c, s
+                break
+        return cat, soft
 
     def get_dir_size_fast(self, path):
         total = 0
@@ -89,10 +77,8 @@ class SystemCleaner:
                     with os.scandir(current) as it:
                         for entry in it:
                             try:
-                                if entry.is_file(follow_symlinks=False):
-                                    total += entry.stat().st_size
-                                elif entry.is_dir(follow_symlinks=False):
-                                    stack.append(entry.path)
+                                if entry.is_file(follow_symlinks=False): total += entry.stat().st_size
+                                elif entry.is_dir(follow_symlinks=False): stack.append(entry.path)
                             except: pass
                 except: pass
         except: pass
@@ -100,433 +86,545 @@ class SystemCleaner:
 
     def format_size(self, size):
         for unit in ['B', 'KB', 'MB', 'GB']:
-            if size < 1024.0:
-                return f"{size:.2f} {unit}"
+            if size < 1024.0: return f"{size:.2f} {unit}"
             size /= 1024.0
         return f"{size:.2f} TB"
 
     def scan_generator(self):
-        """生成器：产生每一个发现的垃圾项"""
-        # 1. 扫描基础项
-        for item in self.base_targets:
-            if os.path.exists(item['path']):
-                size = self.get_dir_size_fast(item['path'])
-                if size > 0:
-                    yield {
-                        "category": item['cat'],
-                        "name": item['name'],
-                        "path": item['path'],
-                        "raw_size": size,
-                        "display_size": self.format_size(size)
-                    }
+        # 1. 回收站
+        try:
+            rb_size = 0
+            for drive in range(ord('C'), ord('Z')+1):
+                root = f"{chr(drive)}:\\$Recycle.Bin"
+                if os.path.exists(root): rb_size += self.get_dir_size_fast(root)
+            if rb_size > 0:
+                yield {"type": "item", "data": {"cat": "特别清理", "soft": "回收站", "detail": "已删除文件", "path": "RECYCLE_BIN_SPECIAL", "raw_size": rb_size, "display_size": self.format_size(rb_size)}}
+        except: pass
 
-        # 2. 扫描 AppData
+        # 2. 基础目标
+        for item in self.base_targets:
+            yield {"type": "status", "msg": f"正在扫描: {item['path']}"}
+            if os.path.exists(item['path']):
+                s = self.get_dir_size_fast(item['path'])
+                if s > 0: yield {"type": "item", "data": {"cat": item['cat'], "soft": item['soft'], "detail": item['name'], "path": item['path'], "raw_size": s, "display_size": self.format_size(s)}}
+        
+        # 3. AppData 深度扫描
         roots = [self.local_appdata, self.roaming_appdata]
         
-        def process_appdata_root(root):
-            local_results = []
-            if not os.path.exists(root): return local_results
+        def process(root):
+            res = []
+            if not os.path.exists(root): return res
             try:
                 with os.scandir(root) as it:
                     for entry in it:
                         if not entry.is_dir(): continue
-                        
                         try:
-                            # 快速遍历该软件目录寻找垃圾
-                            for dirpath, dirnames, filenames in os.walk(entry.path):
-                                # 深度限制
-                                if dirpath.count(os.sep) - entry.path.count(os.sep) > 3:
-                                    dirnames[:] = []
-                                    continue
+                            # 深度限制为3层，防止遍历过深
+                            for dp, dn, fn in os.walk(entry.path):
+                                if dp.count(os.sep) - entry.path.count(os.sep) > 3: dn[:]=[]; continue
                                 
-                                current_dirname = os.path.basename(dirpath).lower()
-                                is_junk = any(k in current_dirname for k in self.safe_keywords)
-                                is_danger = any(k in current_dirname for k in self.danger_keywords)
-
-                                if is_junk and not is_danger:
-                                    # 推断分类和名称
-                                    readable_info = self.infer_category(entry.name, dirpath)
-                                    if isinstance(readable_info, tuple):
-                                        readable_name, category = readable_info
-                                    else:
-                                        readable_name, category = readable_info, "应用缓存"
-                                        
-                                    junk_type = os.path.basename(dirpath)
-                                    
-                                    size = self.get_dir_size_fast(dirpath)
-                                    if size > 0:
-                                        local_results.append({
-                                            "category": category,
-                                            "name": f"{readable_name} ({junk_type})",
-                                            "path": dirpath,
-                                            "raw_size": size,
-                                            "display_size": self.format_size(size)
-                                        })
-                                    dirnames[:] = []
+                                cur = os.path.basename(dp).lower()
+                                if any(k in cur for k in self.safe_keywords) and not any(k in cur for k in self.danger_keywords):
+                                    cat, soft = self.infer_info(entry.name, dp)
+                                    s = self.get_dir_size_fast(dp)
+                                    if s > 0:
+                                        res.append({"type": "item", "data": {"cat": cat, "soft": soft, "detail": os.path.basename(dp), "path": dp, "raw_size": s, "display_size": self.format_size(s)}})
+                                    dn[:] = [] # 找到目标后停止深入该分支
                         except: pass
             except: pass
-            return local_results
-
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            futures = [executor.submit(process_appdata_root, r) for r in roots]
-            for future in futures:
-                for res in future.result():
-                    yield res
+            return res
+        
+        # 并行处理
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            futures = []
+            for r in roots:
+                yield {"type": "status", "msg": f"正在深度扫描: {r} ..."}
+                futures.append(ex.submit(process, r))
+                
+            for fut in futures:
+                results = fut.result()
+                for r in results: yield r
 
     def scan_installers(self):
-        """扫描过期安装包"""
         if not os.path.exists(self.downloads): return
-        
-        extensions = {'.exe', '.msi', '.iso', '.zip', '.rar', '.7z'}
+        exts = {'.exe', '.msi', '.iso', '.zip', '.rar', '.7z'}
         now = time.time()
-        limit_days = 30 * 24 * 3600 # 30天
-        
+        limit = 30 * 86400
+        yield {"type": "status", "msg": f"正在分析: {self.downloads}"}
         try:
             with os.scandir(self.downloads) as it:
                 for entry in it:
-                    if entry.is_file() and os.path.splitext(entry.name)[1].lower() in extensions:
+                    if entry.is_file() and os.path.splitext(entry.name)[1].lower() in exts:
                         try:
-                            stat = entry.stat()
-                            mtime = stat.st_mtime
-                            size = stat.st_size
-                            
-                            # 如果修改时间超过30天
-                            if now - mtime > limit_days:
-                                dt_object = datetime.fromtimestamp(mtime)
-                                date_str = dt_object.strftime("%Y-%m-%d")
-                                
-                                yield {
-                                    "name": entry.name,
-                                    "path": entry.path,
-                                    "raw_size": size,
-                                    "date": date_str,
-                                    "display_size": self.format_size(size)
-                                }
+                            st = entry.stat()
+                            if now - st.st_mtime > limit:
+                                yield {"type": "item", "data": {"name": entry.name, "path": entry.path, "raw_size": st.st_size, "date": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d"), "display_size": self.format_size(st.st_size)}}
                         except: pass
         except: pass
 
     def scan_large_files(self):
-        target_dirs = [
-            os.path.join(self.user_profile, "Downloads"),
-            os.path.join(self.user_profile, "Desktop"),
-            os.path.join(self.user_profile, "Documents"),
-            os.path.join(self.user_profile, "Videos"),
-            os.path.join(self.user_profile, "Pictures"),
-        ]
-        limit_size = 100 * 1024 * 1024 # 100MB
-        for root_dir in target_dirs:
-            if not os.path.exists(root_dir): continue
+        dirs = [os.path.join(self.user_profile, d) for d in ["Downloads", "Desktop", "Documents", "Videos", "Pictures"]]
+        limit = 100 * 1024 * 1024
+        for d in dirs:
+            if not os.path.exists(d): continue
+            yield {"type": "status", "msg": f"正在雷达扫描: {d}"}
             try:
-                for dirpath, dirnames, filenames in os.walk(root_dir):
-                    if os.path.basename(dirpath).startswith('.'):
-                        dirnames[:] = []
-                        continue
-                    for f in filenames:
-                        fp = os.path.join(dirpath, f)
+                for r, ds, fs in os.walk(d):
+                    if os.path.basename(r).startswith('.'): ds[:] = []; continue
+                    for f in fs:
+                        fp = os.path.join(r, f)
                         try:
-                            size = os.path.getsize(fp)
-                            if size > limit_size:
-                                yield {
-                                    "name": f,
-                                    "path": fp,
-                                    "raw_size": size,
-                                    "display_size": self.format_size(size)
-                                }
+                            sz = os.path.getsize(fp)
+                            if sz > limit: 
+                                yield {"type": "item", "data": {"name": f, "path": fp, "raw_size": sz, "display_size": self.format_size(sz)}}
                         except: pass
             except: pass
 
     def delete_item(self, path):
-        deleted_size = 0
-        errors = 0
+        if path == "RECYCLE_BIN_SPECIAL":
+            try: return 0, 0 if ctypes.windll.shell32.SHEmptyRecycleBinW(None, None, 7) == 0 else 1
+            except: return 0, 1
         if not os.path.exists(path): return 0, 0
+        ds, errs = 0, 0
         try:
-            if os.path.isfile(path):
-                size = os.path.getsize(path)
-                os.remove(path)
-                return size, 0
-            else:
-                for root, dirs, files in os.walk(path, topdown=False):
-                    for name in files:
-                        try:
-                            fp = os.path.join(root, name)
-                            size = os.path.getsize(fp)
-                            os.remove(fp)
-                            deleted_size += size
-                        except: errors += 1
-                    for name in dirs:
-                        try: os.rmdir(os.path.join(root, name))
-                        except: pass
-        except: errors += 1
-        return deleted_size, errors
+            if os.path.isfile(path): s=os.path.getsize(path); os.remove(path); return s, 0
+            for r, d, f in os.walk(path, topdown=False):
+                for file in f:
+                    try: fp=os.path.join(r,file); ds+=os.path.getsize(fp); os.remove(fp)
+                    except: errs+=1
+                for dir in d:
+                    try: os.rmdir(os.path.join(r,dir))
+                    except: pass
+            try: os.rmdir(path)
+            except: pass
+        except: errs+=1
+        return ds, errs
 
+# --- UI 主程序 ---
 class CleanerGUI:
     def __init__(self, root):
         self.root = root
         self.cleaner = SystemCleaner()
-        
-        # 结果缓存
-        self.junk_items = {} # Map iid -> item data
-        self.total_junk_size = 0
-        self.categories_created = set()
-        
         self.queue = Queue()
-        self.scanning = False
+        self.current_mode = "junk"
         
-        self.setup_styles()
-        self.setup_ui()
+        self.node_map = {} 
+        self.total_scan_size = 0
         
-        if not self.is_admin():
-            messagebox.showwarning("权限提示", "建议以【管理员身份】运行，否则系统临时文件无法清理。")
+        self.load_icons()
+        self.setup_style()
+        self.setup_layout()
+        
+        if not is_admin():
+            self.root.after(100, self.ask_admin)
 
-    def is_admin(self):
-        try: return ctypes.windll.shell32.IsUserAnAdmin()
-        except: return False
+    def ask_admin(self):
+        if messagebox.askyesno("权限请求", "本工具需要管理员权限才能清理系统垃圾。\n是否重新以管理员身份运行？"):
+            run_as_admin()
+            self.root.destroy()
+            sys.exit()
 
-    def setup_styles(self):
-        style = ttk.Style()
-        if 'vista' in style.theme_names(): style.theme_use('vista')
-        elif 'clam' in style.theme_names(): style.theme_use('clam')
-        
-        style.configure(".", font=("Microsoft YaHei", 9))
-        style.configure("Treeview", rowheight=26)
-        style.configure("Treeview.Heading", font=("Microsoft YaHei", 9, "bold"))
+    def load_icons(self):
+        self.icons = {k: tk.PhotoImage(data=v) for k, v in ICONS.items()}
 
-    def setup_ui(self):
-        self.root.title("C盘深度清理助手 (v4.0 分类增强版)")
-        self.root.geometry("1000x750")
+    def setup_style(self):
+        s = ttk.Style()
+        try: s.theme_use('vista')
+        except: s.theme_use('clam')
         
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        # --- 纯净白昼配色 (Pure Light Theme) ---
+        self.colors = {
+            "bg_side": "#f3f3f3",      # 极浅灰侧边栏
+            "fg_side": "#444444",      # 深灰文字
+            "accent": "#0067c0",       # Windows 11 Blue
+            "bg_main": "#ffffff",      # 纯白内容区
+            "sel_side": "#e9e9e9",     # 侧边栏选中背景
+            "fg_title": "#202020",     # 标题文字
+            "status_bar": "#f0f0f0"    # 状态栏背景
+        }
         
-        # Tab 1: 智能清理 (分类)
-        self.tab_junk = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_junk, text=" 🧹 智能清理 ")
-        self.setup_junk_ui(self.tab_junk)
+        s.configure(".", background=self.colors["bg_main"], font=("Segoe UI Variable Display", 9))
+        
+        # 侧边栏样式
+        s.configure("Sidebar.Treeview", 
+                    background=self.colors["bg_side"], 
+                    fieldbackground=self.colors["bg_side"], 
+                    foreground=self.colors["fg_side"], 
+                    rowheight=45, 
+                    font=("Segoe UI", 11), 
+                    borderwidth=0)
+        s.map("Sidebar.Treeview", background=[('selected', self.colors["sel_side"])], foreground=[('selected', 'black')])
+        
+        # 内容区样式
+        s.configure("Content.Treeview", background="white", fieldbackground="white", rowheight=32, font=("Segoe UI", 10), borderwidth=0)
+        s.configure("Content.Treeview.Heading", background="white", foreground="#666", font=("Segoe UI", 9, "bold"), relief="flat")
+        s.map("Content.Treeview", background=[('selected', '#e5f3ff')], foreground=[('selected', 'black')])
+        
+        # 进度条
+        s.configure("Horizontal.TProgressbar", background=self.colors["accent"], troughcolor="#e0e0e0", bordercolor="#e0e0e0", lightcolor=self.colors["accent"], darkcolor=self.colors["accent"])
 
-        # Tab 2: 📦 旧安装包
-        self.tab_installer = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_installer, text=" 📦 旧安装包 ")
-        self.setup_installer_ui(self.tab_installer)
+    def setup_layout(self):
+        self.root.title("C盘深度清理 v4.2 (渲染增强版)")
+        self.root.geometry("1100x750")
         
-        # Tab 3: 大文件
-        self.tab_large = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_large, text=" 🐘 大文件查找 ")
-        self.setup_large_ui(self.tab_large)
+        main = tk.Frame(self.root, bg="white")
+        main.pack(fill="both", expand=True)
         
-        # 状态栏
-        self.status_var = tk.StringVar(value="准备就绪")
-        ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W).pack(side=tk.BOTTOM, fill=tk.X)
-        self.progress = ttk.Progressbar(self.root, mode='indeterminate')
-        self.progress.pack(side=tk.BOTTOM, fill=tk.X)
+        # --- Sidebar ---
+        side = tk.Frame(main, bg=self.colors["bg_side"], width=240)
+        side.pack(side="left", fill="y")
+        side.pack_propagate(False)
+        
+        # Title
+        tk.Label(side, text="Clean Master", bg=self.colors["bg_side"], fg=self.colors["fg_title"], 
+                 font=("Segoe UI", 16, "bold"), pady=30, anchor="w", padx=25).pack(fill="x")
+        
+        self.menu = ttk.Treeview(side, style="Sidebar.Treeview", show="tree", selectmode="browse")
+        self.menu.pack(fill="both", expand=True)
+        self.menu_items = {
+            self.menu.insert("", "end", text=" 智能清理", image=self.icons['clean'], open=True): "junk",
+            self.menu.insert("", "end", text=" 安装包", image=self.icons['box']): "inst",
+            self.menu.insert("", "end", text=" 大文件", image=self.icons['search']): "large"
+        }
+        self.menu.bind("<<TreeviewSelect>>", self.on_menu_change)
+        
+        # --- Content ---
+        content = tk.Frame(main, bg="white")
+        content.pack(side="right", fill="both", expand=True)
+        
+        # Header
+        self.header = tk.Frame(content, bg="white", height=90, padx=30, pady=15)
+        self.header.pack(fill="x")
+        self.header.pack_propagate(False)
+        
+        self.lbl_title = tk.Label(self.header, text="准备就绪", font=("Segoe UI Variable Display", 20, "bold"), bg="white", fg="#333")
+        self.lbl_title.pack(side="left")
+        
+        self.btn_action = tk.Button(self.header, text="开始扫描", bg=self.colors["accent"], fg="white", 
+                                    font=("Segoe UI", 10, "bold"), relief="flat", padx=30, pady=8, cursor="hand2", command=self.on_scan)
+        self.btn_action.pack(side="right")
+        
+        # Progress Bar (Hidden by default)
+        self.progress = ttk.Progressbar(content, style="Horizontal.TProgressbar", mode="indeterminate", length=500)
+        
+        # Tree Area
+        self.tree_frame = tk.Frame(content, bg="white", padx=20, pady=0)
+        self.tree_frame.pack(fill="both", expand=True)
+        
+        self.tree = ttk.Treeview(self.tree_frame, style="Content.Treeview", show="headings", selectmode="extended")
+        scroll = ttk.Scrollbar(self.tree_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scroll.set)
+        
+        self.tree.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        
+        self.tree.bind("<Button-3>", self.on_right_click)
+        self.tree.bind("<<TreeviewSelect>>", self.on_select)
+        self.tree.bind("<ButtonRelease-1>", self.on_click_release)
 
-    def setup_junk_ui(self, parent):
-        top_frame = ttk.Frame(parent, padding=10)
-        top_frame.pack(fill=tk.X)
+        # Treeview Tags (颜色高亮) - Moved here to fix AttributeError
+        self.tree.tag_configure("huge", foreground="#d83b01", font=("Segoe UI", 10, "bold")) # > 500MB (Red)
+        self.tree.tag_configure("large", foreground="#ea5e00") # > 50MB (Orange)
+        self.tree.tag_configure("normal", foreground="#333333")
         
-        ttk.Button(top_frame, text="⚡ 扫描垃圾", command=self.start_scan_junk).pack(side=tk.LEFT, padx=5)
-        self.btn_clean_junk = ttk.Button(top_frame, text="🗑️ 清理选中", command=self.clean_junk, state=tk.DISABLED)
-        self.btn_clean_junk.pack(side=tk.LEFT, padx=5)
-        ttk.Label(top_frame, text="支持双击分类折叠/展开", foreground="gray").pack(side=tk.LEFT, padx=10)
-        
-        self.lbl_junk_stats = ttk.Label(top_frame, text="", foreground="#2e7d32")
-        self.lbl_junk_stats.pack(side=tk.RIGHT)
+        # Status Bar
+        self.status_bar = tk.Label(content, text=" 就绪", bd=0, relief="flat", anchor="w", 
+                                   bg=self.colors["status_bar"], fg="#666", font=("Segoe UI", 9), padx=10, pady=5)
+        self.status_bar.pack(fill="x", side="bottom")
 
-        tree_frame = ttk.Frame(parent, padding=5)
-        tree_frame.pack(fill=tk.BOTH, expand=True)
+        self.menu.selection_set(list(self.menu_items.keys())[0])
+        self.set_cols("junk")
 
-        self.tree_junk = ttk.Treeview(tree_frame, columns=("path", "size", "status"), selectmode="extended")
-        self.tree_junk.heading("#0", text="分类 / 名称", anchor="w")
-        self.tree_junk.heading("path", text="路径", anchor="w")
-        self.tree_junk.heading("size", text="大小", anchor="e")
-        self.tree_junk.heading("status", text="状态", anchor="c")
-        
-        self.tree_junk.column("#0", width=300)
-        self.tree_junk.column("path", width=400)
-        self.tree_junk.column("size", width=100, anchor="e")
-        self.tree_junk.column("status", width=80, anchor="c")
-        
-        scrolly = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree_junk.yview)
-        self.tree_junk.configure(yscroll=scrolly.set)
-        self.tree_junk.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrolly.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        self.tree_junk.bind("<Button-3>", lambda e: self.show_context_menu(e, self.tree_junk))
+    def set_cols(self, mode):
+        if mode == "junk":
+            self.tree.configure(show="tree headings")
+            self.tree["columns"] = ("size", "path")
+            self.tree.heading("#0", text="分类 / 名称", anchor="w")
+            self.tree.column("#0", width=380)
+            self.tree.heading("size", text="大小", anchor="e")
+            self.tree.column("size", width=100)
+            self.tree.heading("path", text="路径", anchor="w")
+            self.tree.column("path", width=350)
+        elif mode == "inst":
+            self.tree.configure(show="headings")
+            self.tree["columns"] = ("date", "name", "path", "size")
+            self.tree.heading("date", text="日期", anchor="w"); self.tree.column("date", width=100)
+            self.tree.heading("name", text="文件名", anchor="w"); self.tree.column("name", width=250)
+            self.tree.heading("path", text="路径", anchor="w"); self.tree.column("path", width=400)
+            self.tree.heading("size", text="大小", anchor="e"); self.tree.column("size", width=100)
+        elif mode == "large":
+            self.tree.configure(show="headings")
+            self.tree["columns"] = ("name", "path", "size")
+            self.tree.heading("name", text="文件名", anchor="w"); self.tree.column("name", width=250)
+            self.tree.heading("path", text="路径", anchor="w"); self.tree.column("path", width=500)
+            self.tree.heading("size", text="大小", anchor="e"); self.tree.column("size", width=100)
 
-    def setup_installer_ui(self, parent):
-        top_frame = ttk.Frame(parent, padding=10)
-        top_frame.pack(fill=tk.X)
-        
-        ttk.Button(top_frame, text="🔍 扫描 Download 文件夹", command=self.start_scan_installers).pack(side=tk.LEFT)
-        ttk.Label(top_frame, text="筛选：超过 30 天未使用的 .exe/.msi/.zip", foreground="gray").pack(side=tk.LEFT, padx=10)
-        
-        self.tree_inst = ttk.Treeview(parent, columns=("date", "path", "size"), show="headings", selectmode="extended")
-        self.tree_inst.heading("date", text="修改日期")
-        self.tree_inst.heading("path", text="文件路径")
-        self.tree_inst.heading("size", text="大小")
-        self.tree_inst.column("date", width=120)
-        self.tree_inst.column("path", width=500)
-        self.tree_inst.column("size", width=100, anchor="e")
-        self.tree_inst.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
-        self.tree_inst.bind("<Button-3>", lambda e: self.show_context_menu(e, self.tree_inst))
+    def on_menu_change(self, e):
+        sel = self.menu.selection()
+        if not sel: return
+        self.current_mode = self.menu_items[sel[0]]
+        self.tree.delete(*self.tree.get_children())
+        self.node_map = {}
+        self.size_stats = {} # Reset stats
+        self.lbl_title.config(text="准备就绪")
+        self.btn_action.config(text="开始扫描", bg=self.colors["accent"], state="normal")
+        self.set_cols(self.current_mode)
+        self.status_bar.config(text=" 就绪")
 
-    def setup_large_ui(self, parent):
-        top_frame = ttk.Frame(parent, padding=10)
-        top_frame.pack(fill=tk.X)
-        ttk.Button(top_frame, text="🔍 查找 >100MB 文件", command=self.start_scan_large).pack(side=tk.LEFT)
-        
-        self.tree_large = ttk.Treeview(parent, columns=("path", "size"), show="headings", selectmode="extended")
-        self.tree_large.heading("path", text="文件路径")
-        self.tree_large.heading("size", text="大小")
-        self.tree_large.column("path", width=600)
-        self.tree_large.column("size", width=100, anchor="e")
-        self.tree_large.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
-        self.tree_large.bind("<Button-3>", lambda e: self.show_context_menu(e, self.tree_large))
-
-    def show_context_menu(self, event, tree):
-        iid = tree.identify_row(event.y)
-        if iid:
-            tree.selection_set(iid)
-            menu = tk.Menu(self.root, tearoff=0)
-            menu.add_command(label="📂 打开所在文件夹", command=lambda: self.open_folder(tree, iid))
-            menu.post(event.x_root, event.y_root)
-
-    def open_folder(self, tree, iid):
-        item = tree.item(iid)
-        # Treeview hierarchy items don't have paths in values usually, need check
-        values = item.get('values', [])
-        path = ""
-        # Check different tree structures
-        if tree == self.tree_junk:
-            # child nodes have path in col 0 (which is values[0] if show="tree headings"?) 
-            # Actually col indices: path=0, size=1, status=2
-            if values: path = values[0]
-        elif tree == self.tree_inst:
-            if len(values) > 1: path = values[1]
-        elif tree == self.tree_large:
-            if len(values) > 0: path = values[0]
+    def on_scan(self):
+        if self.btn_action['text'] == "立即清理":
+            self.clean_selected()
+            return
             
-        if path and os.path.exists(path):
-            if os.path.isfile(path):
-                subprocess.run(['explorer', '/select,', os.path.normpath(path)])
-            else:
-                os.startfile(path)
-
-    # --- Junk Scan ---
-    def start_scan_junk(self):
-        if self.scanning: return
-        self.scanning = True
-        self.tree_junk.delete(*self.tree_junk.get_children())
-        self.junk_items.clear()
-        self.categories_created.clear()
-        self.total_junk_size = 0
-        self.btn_clean_junk.config(state=tk.DISABLED)
-        self.progress.start(10)
-        self.status_var.set("正在分析系统与软件垃圾...")
+        self.tree.delete(*self.tree.get_children())
+        self.node_map = {}
+        self.size_stats = {} # key: item_id, val: size_in_bytes
+        self.total_scan_size = 0
+        self.lbl_title.config(text="扫描中...")
+        self.btn_action.config(state="disabled", bg="#cccccc")
         
-        threading.Thread(target=self.thread_scan_junk, daemon=True).start()
-        self.root.after(50, self.consume_scan_queue)
+        self.progress.pack(fill="x", before=self.tree_frame, padx=20, pady=(0, 10))
+        self.progress.start(10)
+        
+        threading.Thread(target=self.thread_scan, daemon=True).start()
+        self.root.after(20, self.consume_queue)
 
-    def thread_scan_junk(self):
-        for item in self.cleaner.scan_generator():
-            self.queue.put(("junk_item", item))
-        self.queue.put(("done", None))
+    def thread_scan(self):
+        gen = None
+        if self.current_mode == "junk": gen = self.cleaner.scan_generator()
+        elif self.current_mode == "inst": gen = self.cleaner.scan_installers()
+        elif self.current_mode == "large": gen = self.cleaner.scan_large_files()
+        
+        if gen:
+            for item in gen: self.queue.put(item)
+        self.queue.put({"type": "done"})
 
-    def consume_scan_queue(self):
+    def consume_queue(self):
         try:
-            for _ in range(30):
-                msg_type, data = self.queue.get_nowait()
-                if msg_type == "junk_item":
-                    cat = data['category']
-                    # Ensure Category Node Exists
-                    if cat not in self.categories_created:
-                        self.tree_junk.insert("", tk.END, iid=cat, text=cat, open=True)
-                        self.categories_created.add(cat)
-                    
-                    # Insert Item under Category
-                    item_id = self.tree_junk.insert(cat, tk.END, text=data['name'], values=(
-                        data['path'], data['display_size'], "待清理"
-                    ))
-                    self.junk_items[item_id] = data
-                    self.total_junk_size += data['raw_size']
-                    
-                elif msg_type == "done":
-                    self.scanning = False
+            # 动态调整批处理数量，保证 UI 流畅
+            start_time = time.time()
+            while time.time() - start_time < 0.05: # 每帧最多处理 50ms
+                msg = self.queue.get_nowait()
+                m_type = msg.get("type")
+                
+                if m_type == "status":
+                    self.status_bar.config(text=f" {msg['msg']}")
+                
+                elif m_type == "item":
+                    data = msg['data']
+                    if self.current_mode == "junk":
+                        self.add_junk_node(data)
+                    elif self.current_mode == "inst":
+                        tag = self.get_size_tag(data['raw_size'])
+                        self.tree.insert("", "end", values=(data['date'], data['name'], data['path'], data['display_size']), tags=(tag,))
+                    elif self.current_mode == "large":
+                        tag = self.get_size_tag(data['raw_size'])
+                        self.tree.insert("", "end", values=(data['name'], data['path'], data['display_size']), tags=(tag,))
+                
+                elif m_type == "done":
                     self.progress.stop()
-                    self.status_var.set("扫描完成")
-                    self.lbl_junk_stats.config(text=f"总计可释放: {self.cleaner.format_size(self.total_junk_size)}")
-                    self.btn_clean_junk.config(state=tk.NORMAL)
+                    self.progress.pack_forget()
+                    self.lbl_title.config(text="扫描完成")
+                    self.status_bar.config(text=" 扫描完成")
+                    self.btn_action.config(state="disabled", text="立即清理") 
+                    
+                    if self.current_mode == "junk":
+                        if self.total_scan_size == 0:
+                             self.lbl_title.config(text="系统很干净")
+                        else:
+                            # 扫描结束后，更新父节点统计并排序
+                            self.update_junk_tree_stats()
+                            self.lbl_title.config(text=f"发现垃圾: {self.cleaner.format_size(self.total_scan_size)}")
+                    else:
+                        if len(self.tree.get_children()) > 0:
+                            self.update_btn_state() # Trigger check
                     return
         except Empty: pass
-        
-        if self.scanning:
-            self.root.after(50, self.consume_scan_queue)
+        self.root.after(20, self.consume_queue)
 
-    def clean_junk(self):
-        # Recursive selection finding
-        selected_iids = []
-        for sel in self.tree_junk.selection():
-            # If it's a category, clean all children? 
-            # Simpler: user must select items. Or if category selected, get children.
-            if sel in self.categories_created:
-                selected_iids.extend(self.tree_junk.get_children(sel))
-            else:
-                selected_iids.append(sel)
+    def get_size_tag(self, size):
+        if size > 500 * 1024 * 1024: return "huge"
+        if size > 50 * 1024 * 1024: return "large"
+        return "normal"
+
+    def add_junk_node(self, data):
+        # 1. Ensure Category Node
+        cat_id = f"cat_{data['cat']}"
+        if not self.tree.exists(cat_id):
+            self.tree.insert("", "end", iid=cat_id, text=f" {data['cat']}", image=self.icons['sys'], open=True)
+            self.size_stats[cat_id] = 0
+            
+        # 2. Ensure Software Node
+        soft_id = f"soft_{data['cat']}_{data['soft']}"
+        if not self.tree.exists(soft_id):
+            self.tree.insert(cat_id, "end", iid=soft_id, text=f" {data['soft']}", image=self.icons['app'], open=True)
+            self.size_stats[soft_id] = 0
+            
+        # 3. Add Leaf Node
+        icon = self.icons['bin'] if data['path'] == "RECYCLE_BIN_SPECIAL" else self.icons['sys']
+        import uuid
+        uid = str(uuid.uuid4())
         
-        # Deduplicate
-        selected_iids = list(set(selected_iids))
-        if not selected_iids: return
+        tag = self.get_size_tag(data['raw_size'])
+        self.tree.insert(soft_id, "end", iid=uid, text=f" {data['detail']}", values=(data['display_size'], data['path']), image=icon, tags=(tag,))
         
-        if not messagebox.askyesno("确认", f"清理选中的 {len(selected_iids)} 个项目？"): return
+        self.node_map[uid] = data
+        self.total_scan_size += data['raw_size']
         
+        # Accumulate stats
+        self.size_stats[cat_id] += data['raw_size']
+        self.size_stats[soft_id] += data['raw_size']
+
+    def update_junk_tree_stats(self):
+        # 遍历所有分类节点
+        cats = self.tree.get_children()
+        cat_list = []
+        
+        for cat_id in cats:
+            # 1. 更新软件层级
+            softs = self.tree.get_children(cat_id)
+            soft_list = []
+            for soft_id in softs:
+                s_size = self.size_stats.get(soft_id, 0)
+                # 更新文本和Size列
+                self.tree.set(soft_id, "size", self.cleaner.format_size(s_size))
+                # 标记颜色
+                tag = self.get_size_tag(s_size)
+                self.tree.item(soft_id, tags=(tag,))
+                soft_list.append((s_size, soft_id))
+            
+            # 排序软件 (大 -> 小)
+            soft_list.sort(key=lambda x: x[0], reverse=True)
+            for i, (sz, sid) in enumerate(soft_list):
+                self.tree.move(sid, cat_id, i)
+            
+            # 2. 更新分类层级
+            c_size = self.size_stats.get(cat_id, 0)
+            self.tree.set(cat_id, "size", self.cleaner.format_size(c_size))
+            cat_list.append((c_size, cat_id))
+            
+        # 排序分类 (大 -> 小)
+        cat_list.sort(key=lambda x: x[0], reverse=True)
+        for i, (sz, cid) in enumerate(cat_list):
+            self.tree.move(cid, "", i)
+            self.tree.item(cid, open=True) # 默认展开
+
+    def on_click_release(self, event):
+        item = self.tree.identify_row(event.y)
+        if not item: return
+        # 级联选择逻辑
+        children = self.tree.get_children(item)
+        if children:
+            current_sel = list(self.tree.selection())
+            # 如果点击的是父节点，全选/反选逻辑比较复杂，这里简化为：点击父节点选中所有子节点
+            # 实际上 Treeview 多选比较繁琐，这里只做简单的向下选中
+            should_select = item in current_sel
+            
+            queue = list(children)
+            while queue:
+                child = queue.pop(0)
+                if should_select:
+                    if child not in current_sel: current_sel.append(child)
+                # 递归处理
+                grand_children = self.tree.get_children(child)
+                if grand_children: queue.extend(grand_children)
+                
+            self.tree.selection_set(current_sel)
+        self.update_btn_state()
+
+    def on_select(self, e):
+        self.update_btn_state()
+
+    def update_btn_state(self):
+        sel = self.tree.selection()
+        has_leaf = False
+        if self.current_mode == "junk":
+            for s in sel:
+                if s in self.node_map: has_leaf = True; break
+        else: has_leaf = bool(sel)
+        
+        if has_leaf: 
+            self.btn_action.config(state="normal", bg="#d83b01", fg="white")
+        else: 
+            self.btn_action.config(state="disabled", bg="#cccccc")
+
+    def clean_selected(self):
+        sel = self.tree.selection()
+        if not sel: return
+        if not messagebox.askyesno("确认", f"确定删除选中的 {len(sel)} 项？"): return
+        
+        paths = []
+        if self.current_mode == "junk":
+            for s in sel:
+                if s in self.node_map: paths.append(self.node_map[s]['path'])
+        elif self.current_mode == "inst":
+             for s in sel: paths.append(self.tree.item(s)['values'][2])
+        
+        self.btn_action.config(state="disabled", text="清理中...")
+        self.progress.pack(fill="x", before=self.tree_frame, padx=20, pady=(0, 10))
         self.progress.start(10)
-        self.btn_clean_junk.config(state=tk.DISABLED)
-        threading.Thread(target=self.thread_clean, args=(selected_iids,), daemon=True).start()
-        self.root.after(50, self.consume_clean_queue)
+        
+        threading.Thread(target=self.thread_clean, args=(paths,), daemon=True).start()
+        self.root.after(20, self.consume_clean_queue)
 
-    def thread_clean(self, iids):
-        cleaned_size = 0
-        for iid in iids:
-            if iid not in self.junk_items: continue
-            item = self.junk_items[iid]
-            self.queue.put(("status", (iid, "清理中...")))
-            size, errors = self.cleaner.delete_item(item['path'])
-            cleaned_size += size
-            self.queue.put(("status", (iid, "完成" if not errors else "跳过占用")))
-        self.queue.put(("clean_done", cleaned_size))
+    def thread_clean(self, paths):
+        total_freed = 0
+        for i, p in enumerate(paths):
+            self.queue.put({"type": "status", "msg": f"正在删除: {p}"})
+            s, _ = self.cleaner.delete_item(p)
+            total_freed += s
+        self.queue.put({"type": "clean_done", "size": total_freed})
 
     def consume_clean_queue(self):
         try:
             while True:
-                msg, data = self.queue.get_nowait()
-                if msg == "status":
-                    self.tree_junk.set(data[0], "status", data[1])
-                elif msg == "clean_done":
+                msg = self.queue.get_nowait()
+                if msg['type'] == "status":
+                    self.status_bar.config(text=f" {msg['msg']}")
+                elif msg['type'] == "clean_done":
                     self.progress.stop()
-                    messagebox.showinfo("完成", f"释放空间: {self.cleaner.format_size(data)}")
-                    self.btn_clean_junk.config(state=tk.NORMAL)
+                    self.progress.pack_forget()
+                    self.status_bar.config(text=" 清理完成")
+                    
+                    messagebox.showinfo("完成", f"清理结束！释放空间: {self.cleaner.format_size(msg['size'])}")
+                    
+                    # 刷新界面
+                    items_to_delete = []
+                    if self.current_mode == "junk":
+                        for s in self.tree.selection():
+                            if s in self.node_map: items_to_delete.append(s)
+                    else:
+                        items_to_delete = list(self.tree.selection())
+                        
+                    for s in items_to_delete:
+                        if self.tree.exists(s): self.tree.delete(s)
+                        
+                    self.btn_action.config(state="normal", text="立即清理")
+                    self.lbl_title.config(text="清理完成")
                     return
         except Empty: pass
-        self.root.after(50, self.consume_clean_queue)
+        self.root.after(20, self.consume_clean_queue)
 
-    # --- Installers & Large Files (Simplified for brevity) ---
-    def start_scan_installers(self):
-        self.tree_inst.delete(*self.tree_inst.get_children())
-        threading.Thread(target=self.thread_scan_inst, daemon=True).start()
+    def on_right_click(self, event):
+        item = self.tree.identify_row(event.y)
+        if item:
+            if not item in self.tree.selection():
+                self.tree.selection_set(item)
+            menu = tk.Menu(self.root, tearoff=0)
+            menu.add_command(label="📂 打开位置", command=lambda: self.open_folder(item))
+            menu.post(event.x_root, event.y_root)
 
-    def thread_scan_inst(self):
-        for item in self.cleaner.scan_installers():
-            self.tree_inst.insert("", tk.END, values=(item['date'], item['path'], item['display_size']))
-
-    def start_scan_large(self):
-        self.tree_large.delete(*self.tree_large.get_children())
-        threading.Thread(target=self.thread_scan_large, daemon=True).start()
-
-    def thread_scan_large(self):
-        results = sorted(list(self.cleaner.scan_large_files()), key=lambda x: x['raw_size'], reverse=True)
-        for item in results:
-            self.tree_large.insert("", tk.END, values=(item['path'], item['display_size']))
+    def open_folder(self, item):
+        vals = self.tree.item(item)['values']
+        if not vals: return
+        idx = 1 if self.current_mode in ["junk", "large"] else 2
+        path = vals[idx]
+        if path == "RECYCLE_BIN_SPECIAL": return
+        if os.path.exists(path):
+            try:
+                if os.path.isfile(path): subprocess.run(['explorer', '/select,', os.path.normpath(path)])
+                else: os.startfile(path)
+            except: pass
 
 if __name__ == "__main__":
     root = tk.Tk()
