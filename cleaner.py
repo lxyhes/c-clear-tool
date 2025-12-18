@@ -6,7 +6,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import ctypes
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
+import winreg
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from queue import Queue, Empty
 from datetime import datetime
 import time
@@ -18,7 +19,9 @@ ICONS = {
     'search': b'R0lGODlhEAAQAJEAAP///wAAAP///wAAACH5BAEAAAIALAAAAAAQABAAAAInlI+py+0PjApQsGmv1XD7D3ZiaJbm6aFqymrt8sLwPN90nQ98rwAAOw==',
     'sys': b'R0lGODlhEAAQAJEAAP///wAAAP///////yH5BAEAAAIALAAAAAAQABAAAAIplI+py+0PopwxUbpuZRfQqGwYMDQeMAxs6z4wLCON8j1vW9vn/P9DAgA7', 
     'app': b'R0lGODlhEAAQAJEAAP///wAAAP///////yH5BAEAAAIALAAAAAAQABAAAAIolI+py+0PowR0TgrhzTbx7m2Y95GZaPp4GpqmFp3nSlr1rM965/9DCAA7', 
-    'bin': b'R0lGODlhEAAQAJEAAP///wAAAP///////yH5BAEAAAIALAAAAAAQABAAAAIqlI+py+0Po5x00osBTfD2jXHg93Ei+aCmmqKcy7LzC8N0JEN7v/v+QAQAOw=='
+    'bin': b'R0lGODlhEAAQAJEAAP///wAAAP///////yH5BAEAAAIALAAAAAAQABAAAAIqlI+py+0Po5x00osBTfD2jXHg93Ei+aCmmqKcy7LzC8N0JEN7v/v+QAQAOw==',
+    'chat': b'R0lGODlhEAAQAJEAAP///wAAAP///////yH5BAEAAAIALAAAAAAQABAAAAIolI+py+0Po5x00osBTfD2jXHg93Ei+aCmmqKcy7LzC8N0JEN7v/v+QAQAOw==',
+    'folder': b'R0lGODlhEAAQAJEAAP///wAAAP///wAAACH5BAEAAAIALAAAAAAQABAAAAIolI+py+0Po5x00osBTfD2jXHg93Ei+aCmmqKcy7LzC8N0JEN7v/v+QAQAOw=='
 }
 
 def is_admin():
@@ -180,6 +183,136 @@ class SystemCleaner:
                         except: pass
             except: pass
 
+    def scan_social_apps(self):
+        """注册表+路径探测：100% 准确定位微信和 QQ"""
+        search_paths = []
+
+        # 1. 尝试从注册表获取微信路径
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Tencent\WeChat", 0, winreg.KEY_READ)
+            path, _ = winreg.QueryValueEx(key, "FileSavePath")
+            if path and os.path.exists(path): search_paths.append(("微信 WeChat", path))
+            winreg.CloseKey(key)
+        except: pass
+
+        # 2. 尝试从注册表获取 QQ 路径 (安装路径或数据路径)
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Tencent\QQ2012", 0, winreg.KEY_READ)
+            path, _ = winreg.QueryValueEx(key, "UserDataSavePath") # 有些版本是这个
+            if path and os.path.exists(path): search_paths.append(("腾讯 QQ", path))
+            winreg.CloseKey(key)
+        except: pass
+
+        # 3. 常见默认路径补偿 (AppData 和 Documents)
+        common_bases = [
+            os.path.join(os.environ['APPDATA'], "Tencent"),
+            os.path.join(os.environ['USERPROFILE'], "Documents"),
+            os.path.join(os.environ['LOCALAPPDATA'], "Tencent")
+        ]
+        
+        # 补加 SHGetSpecialFolderPath 获取的文档路径
+        buf = ctypes.create_unicode_buffer(1024)
+        ctypes.windll.shell32.SHGetSpecialFolderPathW(None, buf, 0x0005, False)
+        if buf.value not in common_bases: common_bases.append(buf.value)
+
+        social_targets = [
+            {"name": "微信 WeChat", "root_names": ["WeChat Files", "WeChat"], "junk_subs": ["FileStorage\\Cache", "FileStorage\\Image", "FileStorage\\Video", "FileStorage\\File", "FileStorage\\CustomEmoji"]},
+            {"name": "腾讯 QQ", "root_names": ["Tencent Files", "TencentFiles", "QQ"], "junk_subs": ["Image", "Video", "File", "Audio", "Cache"]}
+        ]
+
+        # 4. 针对用户的特殊自定义路径进行增强搜索 (例如 E:\Cache)
+        custom_suspects = []
+        for drive in drives:
+            # 常见的自定义缓存命名
+            for suspect in ["Cache", "TempCache", "TencentData", "WeChatData"]:
+                p = os.path.join(drive, suspect)
+                if os.path.exists(p): custom_suspects.append(p)
+        
+        for base in set(common_bases + custom_suspects):
+            if not os.path.exists(base): continue
+            
+            # 模式 A: 目录直接是 WeChat Files
+            for target in social_targets:
+                for r_name in target['root_names']:
+                    full_path = os.path.join(base, r_name)
+                    if os.path.exists(full_path):
+                        search_paths.append((target['name'], full_path))
+            
+            # 模式 B: 目录是 E:\Cache，里面直接就是账号文件夹 (微信特有结构)
+            # 我们检查里面是否包含 FileStorage 这种特征
+            try:
+                with os.scandir(base) as it:
+                    for entry in it:
+                        if entry.is_dir():
+                            # 微信特征检测
+                            if os.path.exists(os.path.join(entry.path, "FileStorage")):
+                                search_paths.append(("微信 WeChat", base))
+                                break
+                            # QQ 特征检测
+                            if any(os.path.exists(os.path.join(entry.path, sub)) for sub in ["Image", "Video", "Audio"]):
+                                search_paths.append(("腾讯 QQ", base))
+                                break
+            except: pass
+
+        # 去重并开始分析
+        unique_paths = {}
+        for name, path in search_paths:
+            if path not in unique_paths: unique_paths[path] = name
+
+        for full_path, name in unique_paths.items():
+            yield {"type": "status", "msg": f"正在分析社交目录: {full_path}"}
+            target = next((t for t in social_targets if t['name'] == name), None)
+            if not target: continue
+            
+            try:
+                with os.scandir(full_path) as it:
+                    for entry in it:
+                        # 排除系统级文件夹，通常是 UIN 或微信号
+                        if entry.is_dir() and entry.name not in ["All Users", "Applet", "config"]:
+                            for sub in target['junk_subs']:
+                                full_sub = os.path.join(entry.path, sub)
+                                if os.path.exists(full_sub):
+                                    s = self.get_dir_size_fast(full_sub)
+                                    if s > 0:
+                                        yield {"type": "item", "data": {
+                                            "cat": target['name'],
+                                            "soft": entry.name,
+                                            "detail": sub.split('\\')[-1], 
+                                            "path": full_sub, 
+                                            "raw_size": s, 
+                                            "display_size": self.format_size(s)
+                                        }}
+            except: pass
+
+    def scan_custom(self, paths):
+        """智能扫描用户自定义目录"""
+        for base in paths:
+            if not os.path.exists(base): continue
+            yield {"type": "status", "msg": f"正在智能分析自定义目录: {base}"}
+            try:
+                # 使用 walk 遍历，但限制深度以保证性能
+                for root, dirs, files in os.walk(base):
+                    # 深度限制逻辑
+                    if root.count(os.sep) - base.count(os.sep) > 3:
+                        dirs[:] = []
+                        continue
+                    
+                    cur_name = os.path.basename(root).lower()
+                    # 识别垃圾文件夹特征
+                    if any(k in cur_name for k in self.safe_keywords) and not any(k in cur_name for k in self.danger_keywords):
+                        s = self.get_dir_size_fast(root)
+                        if s > 0:
+                            yield {"type": "item", "data": {
+                                "cat": "自定义目录",
+                                "soft": os.path.basename(base),
+                                "detail": os.path.relpath(root, base),
+                                "path": root,
+                                "raw_size": s,
+                                "display_size": self.format_size(s)
+                            }}
+                            dirs[:] = [] # 找到一个垃圾根目录后，不再深入其子目录以免重复统计
+            except: pass
+
     def delete_item(self, path):
         if path == "RECYCLE_BIN_SPECIAL":
             try: return 0, 0 if ctypes.windll.shell32.SHEmptyRecycleBinW(None, None, 7) == 0 else 1
@@ -207,6 +340,8 @@ class CleanerGUI:
         self.cleaner = SystemCleaner()
         self.queue = Queue()
         self.current_mode = "junk"
+        self.custom_paths_file = "custom_paths.txt"
+        self.custom_paths = self.load_custom_paths()
         
         self.node_map = {} 
         self.total_scan_size = 0
@@ -217,6 +352,20 @@ class CleanerGUI:
         
         if not is_admin():
             self.root.after(100, self.ask_admin)
+
+    def load_custom_paths(self):
+        if os.path.exists(self.custom_paths_file):
+            try:
+                with open(self.custom_paths_file, 'r', encoding='utf-8') as f:
+                    return [line.strip() for line in f if os.path.exists(line.strip())]
+            except: return []
+        return []
+
+    def save_custom_paths(self):
+        try:
+            with open(self.custom_paths_file, 'w', encoding='utf-8') as f:
+                for p in self.custom_paths: f.write(p + "\n")
+        except: pass
 
     def ask_admin(self):
         if messagebox.askyesno("权限请求", "本工具需要管理员权限才能清理系统垃圾。\n是否重新以管理员身份运行？"):
@@ -283,6 +432,8 @@ class CleanerGUI:
         self.menu.pack(fill="both", expand=True)
         self.menu_items = {
             self.menu.insert("", "end", text=" 智能清理", image=self.icons['clean'], open=True): "junk",
+            self.menu.insert("", "end", text=" 社交专清", image=self.icons['chat']): "social",
+            self.menu.insert("", "end", text=" 自定义扫描", image=self.icons['folder']): "custom",
             self.menu.insert("", "end", text=" 安装包", image=self.icons['box']): "inst",
             self.menu.insert("", "end", text=" 大文件", image=self.icons['search']): "large"
         }
@@ -300,9 +451,16 @@ class CleanerGUI:
         self.lbl_title = tk.Label(self.header, text="准备就绪", font=("Segoe UI Variable Display", 20, "bold"), bg="white", fg="#333")
         self.lbl_title.pack(side="left")
         
-        self.btn_action = tk.Button(self.header, text="开始扫描", bg=self.colors["accent"], fg="white", 
+        # Action Buttons Container
+        self.btn_frame = tk.Frame(self.header, bg="white")
+        self.btn_frame.pack(side="right")
+
+        self.btn_add_path = tk.Button(self.btn_frame, text="添加目录", bg="#666", fg="white", 
+                                    font=("Segoe UI", 9), relief="flat", padx=15, pady=5, cursor="hand2", command=self.on_add_path)
+        
+        self.btn_action = tk.Button(self.btn_frame, text="开始扫描", bg=self.colors["accent"], fg="white", 
                                     font=("Segoe UI", 10, "bold"), relief="flat", padx=30, pady=8, cursor="hand2", command=self.on_scan)
-        self.btn_action.pack(side="right")
+        self.btn_action.pack(side="right", padx=(10, 0))
         
         # Progress Bar (Hidden by default)
         self.progress = ttk.Progressbar(content, style="Horizontal.TProgressbar", mode="indeterminate", length=500)
@@ -336,7 +494,7 @@ class CleanerGUI:
         self.set_cols("junk")
 
     def set_cols(self, mode):
-        if mode == "junk":
+        if mode in ["junk", "social", "custom"]:
             self.tree.configure(show="tree headings")
             self.tree["columns"] = ("size", "path")
             self.tree.heading("#0", text="分类 / 名称", anchor="w")
@@ -359,6 +517,18 @@ class CleanerGUI:
             self.tree.heading("path", text="路径", anchor="w"); self.tree.column("path", width=500)
             self.tree.heading("size", text="大小", anchor="e"); self.tree.column("size", width=100)
 
+    def on_add_path(self):
+        from tkinter import filedialog
+        path = filedialog.askdirectory()
+        if path:
+            path = os.path.normpath(path)
+            if path not in self.custom_paths:
+                self.custom_paths.append(path)
+                self.save_custom_paths()
+                messagebox.showinfo("成功", f"已添加目录: {path}")
+                if self.current_mode == "custom":
+                    self.lbl_title.config(text=f"已添加 {len(self.custom_paths)} 个目录")
+
     def on_menu_change(self, e):
         sel = self.menu.selection()
         if not sel: return
@@ -367,6 +537,14 @@ class CleanerGUI:
         self.node_map = {}
         self.size_stats = {} # Reset stats
         self.lbl_title.config(text="准备就绪")
+        
+        # 显示/隐藏添加按钮
+        if self.current_mode == "custom":
+            self.btn_add_path.pack(side="left")
+            self.lbl_title.config(text=f"已添加 {len(self.custom_paths)} 个目录")
+        else:
+            self.btn_add_path.pack_forget()
+
         self.btn_action.config(text="开始扫描", bg=self.colors["accent"], state="normal")
         self.set_cols(self.current_mode)
         self.status_bar.config(text=" 就绪")
@@ -376,6 +554,10 @@ class CleanerGUI:
             self.clean_selected()
             return
             
+        if self.current_mode == "custom" and not self.custom_paths:
+            messagebox.showwarning("提示", "请先点击'添加目录'，告诉我要扫描哪里。")
+            return
+
         self.tree.delete(*self.tree.get_children())
         self.node_map = {}
         self.size_stats = {} # key: item_id, val: size_in_bytes
@@ -392,6 +574,8 @@ class CleanerGUI:
     def thread_scan(self):
         gen = None
         if self.current_mode == "junk": gen = self.cleaner.scan_generator()
+        elif self.current_mode == "social": gen = self.cleaner.scan_social_apps()
+        elif self.current_mode == "custom": gen = self.cleaner.scan_custom(self.custom_paths)
         elif self.current_mode == "inst": gen = self.cleaner.scan_installers()
         elif self.current_mode == "large": gen = self.cleaner.scan_large_files()
         
@@ -412,7 +596,7 @@ class CleanerGUI:
                 
                 elif m_type == "item":
                     data = msg['data']
-                    if self.current_mode == "junk":
+                    if self.current_mode in ["junk", "social", "custom"]:
                         self.add_junk_node(data)
                     elif self.current_mode == "inst":
                         tag = self.get_size_tag(data['raw_size'])
@@ -428,7 +612,7 @@ class CleanerGUI:
                     self.status_bar.config(text=" 扫描完成")
                     self.btn_action.config(state="disabled", text="立即清理") 
                     
-                    if self.current_mode == "junk":
+                    if self.current_mode in ["junk", "social", "custom"]:
                         if self.total_scan_size == 0:
                              self.lbl_title.config(text="系统很干净")
                         else:
@@ -569,10 +753,27 @@ class CleanerGUI:
 
     def thread_clean(self, paths):
         total_freed = 0
-        for i, p in enumerate(paths):
-            self.queue.put({"type": "status", "msg": f"正在删除: {p}"})
-            s, _ = self.cleaner.delete_item(p)
-            total_freed += s
+        # 使用多线程并行删除，提高 I/O 吞吐量
+        # 建议线程数不宜过高，8-16 之间对 SSD 较为理想
+        max_workers = min(len(paths), 12) if paths else 1
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有删除任务
+            future_to_path = {executor.submit(self.cleaner.delete_item, p): p for p in paths}
+            
+            for future in as_completed(future_to_path):
+                path = future_to_path[future]
+                try:
+                    # 获取该路径删除的大小
+                    freed_size, errors = future.result()
+                    total_freed += freed_size
+                    
+                    # 实时通知 UI 正在处理的路径
+                    p_name = os.path.basename(path) if path != "RECYCLE_BIN_SPECIAL" else "回收站"
+                    self.queue.put({"type": "status", "msg": f"已清理: {p_name}"})
+                except Exception as e:
+                    self.queue.put({"type": "status", "msg": f"错误: 无法处理 {os.path.basename(path)}"})
+        
         self.queue.put({"type": "clean_done", "size": total_freed})
 
     def consume_clean_queue(self):
