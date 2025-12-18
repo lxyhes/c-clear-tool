@@ -4,6 +4,7 @@ import winreg
 import ctypes
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils import format_size
+from datetime import datetime
 
 class SystemCleaner:
     def __init__(self):
@@ -14,6 +15,13 @@ class SystemCleaner:
         self.system_root = os.environ['SystemRoot']
         self.downloads = os.path.join(self.user_profile, "Downloads")
         
+        # 扫描黑名单：这些目录文件极多且不可能有社交/办公账号数据，跳过可节省 60% 以上时间
+        self.SYSTEM_EXCLUDE = {
+            'windows', 'program files', 'program files (x86)', 'programdata',
+            'winsxs', 'system32', 'syswow64', 'drivers', 'driverstore',
+            'microsoft', 'package cache', '$recycle.bin', 'system volume information'
+        }
+
         self.base_targets = [
             {"name": "用户临时文件", "path": self.temp, "cat": "系统垃圾", "soft": "Windows"},
             {"name": "系统临时文件", "path": os.path.join(self.system_root, "Temp"), "cat": "系统垃圾", "soft": "Windows"},
@@ -42,6 +50,7 @@ class SystemCleaner:
         return cat, soft
 
     def get_dir_size_fast(self, path):
+        """极致优化的目录大小计算"""
         total = 0
         try:
             stack = [path]
@@ -51,8 +60,10 @@ class SystemCleaner:
                     with os.scandir(current) as it:
                         for entry in it:
                             try:
-                                if entry.is_file(follow_symlinks=False): total += entry.stat().st_size
-                                elif entry.is_dir(follow_symlinks=False): stack.append(entry.path)
+                                if entry.is_file(follow_symlinks=False): 
+                                    total += entry.stat(follow_symlinks=False).st_size
+                                elif entry.is_dir(follow_symlinks=False): 
+                                    stack.append(entry.path)
                             except: pass
                 except: pass
         except: pass
@@ -62,8 +73,9 @@ class SystemCleaner:
         # 1. 回收站
         try:
             rb_size = 0
-            for drive in range(ord('C'), ord('Z')+1):
-                root = f"{chr(drive)}:\$Recycle.Bin"
+            for drive_idx in range(26):
+                drive = chr(ord('A') + drive_idx) + ":\\"
+                root = os.path.join(drive, "$Recycle.Bin")
                 if os.path.exists(root): rb_size += self.get_dir_size_fast(root)
             if rb_size > 0:
                 yield {"type": "item", "data": {"cat": "特别清理", "soft": "回收站", "detail": "已删除文件", "path": "RECYCLE_BIN_SPECIAL", "raw_size": rb_size, "display_size": format_size(rb_size)}}
@@ -119,11 +131,11 @@ class SystemCleaner:
             except: pass
 
         # 2. 自动探测
-        drives = []
         bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+        drives = []
         for i in range(26):
             if bitmask & (1 << i):
-                d = f"{chr(ord('A') + i)}:\"
+                d = chr(ord('A') + i) + ":\\"
                 if ctypes.windll.kernel32.GetDriveTypeW(d) == 3: drives.append(d)
 
         buf = ctypes.create_unicode_buffer(1024)
@@ -150,11 +162,151 @@ class SystemCleaner:
         for name, path in search_paths:
             if path not in unique_tasks: unique_tasks[path] = name
 
-        # 核心优化：并发分析所有找到的社交根目录
         with ThreadPoolExecutor(max_workers=8) as executor:
             futures = [executor.submit(self._analyze_social_root, path, name, social_targets) for path, name in unique_tasks.items()]
             for fut in as_completed(futures):
                 for item in fut.result(): yield item
+
+    def scan_resignation_targets(self, custom_paths=[]):
+        """离职专清 2.0 极速加速版：分治扫描 + 智能避让 + 全隐私覆盖"""
+        # 1. 获取驱动器列表
+        bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+        drives = []
+        for i in range(26):
+            if bitmask & (1 << i):
+                d = chr(ord('A') + i) + ":\\"
+                if ctypes.windll.kernel32.GetDriveTypeW(d) == 3: drives.append(d)
+
+        app_targets = [
+            {"name": "微信 WeChat", "patterns": ["WeChat Files"], "cat": "通讯软件"},
+            {"name": "腾讯 QQ", "patterns": ["Tencent Files", "TencentFiles"], "cat": "通讯软件"},
+            {"name": "钉钉 DingTalk", "patterns": ["DingTalk"], "cat": "办公软件"},
+            {"name": "飞书 Feishu", "patterns": ["Feishu", "Lark"], "cat": "办公软件"}
+        ]
+
+        # 任务分发：一级子目录扫描
+        scan_tasks = []
+        for d in drives:
+            try:
+                with os.scandir(d) as it:
+                    for entry in it:
+                        if entry.is_dir():
+                            if entry.name.lower() in self.SYSTEM_EXCLUDE: continue
+                            scan_tasks.append(entry.path)
+                scan_tasks.append(d)
+            except: pass
+
+        # 2. 高并发雷达扫描
+        with ThreadPoolExecutor(max_workers=24) as executor:
+            futures = [executor.submit(self._radar_scan_sub_folder, path, app_targets) for path in scan_tasks]
+            for fut in as_completed(futures):
+                for item in fut.result(): yield item
+
+        # 3. 系统隐私
+        for item in self._scan_system_privacy(): yield item
+
+        # 4. 自定义目录
+        for cp in custom_paths:
+            if os.path.exists(cp):
+                s = self.get_dir_size_fast(cp)
+                if s > 0:
+                    yield {"type": "item", "data": {
+                        "cat": "自定义敏感目录", "soft": "手动添加",
+                        "detail": os.path.basename(cp), "path": cp, 
+                        "raw_size": s, "display_size": format_size(s)
+                    }}
+
+    def _radar_scan_sub_folder(self, folder_path, targets):
+        results = []
+        try:
+            folder_name = os.path.basename(folder_path).lower()
+            for target in targets:
+                if any(p.lower() == folder_name for p in target['patterns']):
+                    return self._extract_account_folders(folder_path, target)
+            
+            with os.scandir(folder_path) as it:
+                for entry in it:
+                    if entry.is_dir():
+                        e_name_low = entry.name.lower()
+                        for target in targets:
+                            if any(p.lower() == e_name_low for p in target['patterns']):
+                                results.extend(self._extract_account_folders(entry.path, target))
+        except: pass
+        return results
+
+    def _extract_account_folders(self, root_path, target):
+        accounts = []
+        exclude = ["All Users", "Applet", "config", "temp", "logs", "cache"]
+        try:
+            with os.scandir(root_path) as it:
+                for entry in it:
+                    if entry.is_dir() and entry.name not in exclude:
+                        s = self.get_dir_size_fast(entry.path)
+                        if s > 1024:
+                            accounts.append({"type": "item", "data": {
+                                "cat": target['cat'], "soft": target['name'],
+                                "detail": f"账号数据: {entry.name}", "path": entry.path, 
+                                "raw_size": s, "display_size": format_size(s)
+                            }})
+        except: pass
+        return accounts
+
+    def _scan_system_privacy(self):
+        privacy_results = []
+        local_appdata = self.local_appdata
+        roaming_appdata = self.roaming_appdata
+        user_home = self.user_profile
+
+        # A. 浏览器
+        browsers = {
+            "Chrome": os.path.join(local_appdata, "Google", "Chrome", "User Data"),
+            "Edge": os.path.join(local_appdata, "Microsoft", "Edge", "User Data")
+        }
+        for b_name, b_path in browsers.items():
+            if os.path.exists(b_path):
+                for root, dirs, files in os.walk(b_path):
+                    if "Login Data" in files or "Cookies" in files:
+                        for target in ["Login Data", "Cookies", "History", "Web Data"]:
+                            fp = os.path.join(root, target)
+                            if os.path.exists(fp):
+                                privacy_results.append({"type": "item", "data": {
+                                    "cat": "浏览器隐私", "soft": b_name, "detail": f"凭据/历史: {target}",
+                                    "path": fp, "raw_size": os.path.getsize(fp), "display_size": format_size(os.path.getsize(fp))
+                                }})
+                    if root.count(os.sep) - b_path.count(os.sep) > 2: dirs[:] = []; continue
+
+        # B. 邮件
+        mail_paths = [
+            ("Outlook", os.path.join(local_appdata, "Microsoft", "Outlook")),
+            ("Foxmail", os.path.join(local_appdata, "Foxmail", "Storage")),
+            ("Foxmail", os.path.join(user_home, "Documents", "Foxmail"))
+        ]
+        for m_name, m_path in mail_paths:
+            if os.path.exists(m_path):
+                s = self.get_dir_size_fast(m_path)
+                if s > 0:
+                    privacy_results.append({"type": "item", "data": {
+                        "cat": "邮件存档", "soft": m_name, "detail": "邮件数据库(.ost/.pst)",
+                        "path": m_path, "raw_size": s, "display_size": format_size(s)
+                    }})
+
+        # C. 凭据
+        ssh_path = os.path.join(user_home, ".ssh")
+        if os.path.exists(ssh_path):
+            s = self.get_dir_size_fast(ssh_path)
+            privacy_results.append({"type": "item", "data": { "cat": "开发凭据", "soft": "SSH", "detail": "服务器私钥", "path": ssh_path, "raw_size": s, "display_size": format_size(s) }})
+        
+        ps_history = os.path.join(roaming_appdata, "Microsoft", "Windows", "PowerShell", "PSReadLine", "ConsoleHost_history.txt")
+        if os.path.exists(ps_history):
+            privacy_results.append({"type": "item", "data": { "cat": "指令历史", "soft": "PowerShell", "detail": "命令历史记录", "path": ps_history, "raw_size": os.path.getsize(ps_history), "display_size": format_size(os.path.getsize(ps_history)) }})
+
+        ide_paths = [("VS Code", os.path.join(roaming_appdata, "Code", "User", "workspaceStorage"))]
+        for i_name, i_path in ide_paths:
+            if os.path.exists(i_path):
+                s = self.get_dir_size_fast(i_path)
+                privacy_results.append({"type": "item", "data": { "cat": "IDE 记录", "soft": i_name, "detail": "项目历史与缓存", "path": i_path, "raw_size": s, "display_size": format_size(s) }})
+
+        return privacy_results
 
     def _analyze_social_root(self, root, name, targets):
         res = []

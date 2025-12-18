@@ -1,18 +1,23 @@
 import os
 import ctypes
 import sys
-import tkinter as tk
 
-# --- Base64 图标库 ---
+# --- 现代彩色 3D 符号库 (利用系统原生渲染，高清不失真) ---
+# 这些符号在 Windows 10/11 上会自动显示为精美的彩色 3D 图标
 ICONS = {
-    'clean': b'R0lGODlhEAAQAJEAAP///wAAAP///wAAACH5BAEAAAIALAAAAAAQABAAAAIqlI+py+0Po5x00osBTfD2jXHg93Ei+aCmmqKcy7LzC8N0JEN7v/v+QAQAOw==',
-    'box': b'R0lGODlhEAAQAJEAAP///wAAAP///wAAACH5BAEAAAIALAAAAAAQABAAAAIolI+py+0PxhQ0Wnhd1Z3y7g1C95GZaJqmOK5uK88TQtO2HeM41/dBAQA7',
-    'search': b'R0lGODlhEAAQAJEAAP///wAAAP///wAAACH5BAEAAAIALAAAAAAQABAAAAInlI+py+0PjApQsGmv1XD7D3ZiaJbm6aFqymrt8sLwPN90nQ98rwAAOw==',
-    'sys': b'R0lGODlhEAAQAJEAAP///wAAAP///////yH5BAEAAAIALAAAAAAQABAAAAIplI+py+0PopwxUbpuZRfQqGwYMDQeMAxs6z4wLCON8j1vW9vn/P9DAgA7', 
-    'app': b'R0lGODlhEAAQAJEAAP///wAAAP///////yH5BAEAAAIALAAAAAAQABAAAAIolI+py+0PowR0TgrhzTbx7m2Y95GZaPp4GpqmFp3nSlr1rM965/9DCAA7', 
-    'bin': b'R0lGODlhEAAQAJEAAP///wAAAP///////yH5BAEAAAIALAAAAAAQABAAAAIqlI+py+0Po5x00osBTfD2jXHg93Ei+aCmmqKcy7LzC8N0JEN7v/v+QAQAOw==',
-    'chat': b'R0lGODlhEAAQAJEAAP///wAAAP///////yH5BAEAAAIALAAAAAAQABAAAAIolI+py+0Po5x00osBTfD2jXHg93Ei+aCmmqKcy7LzC8N0JEN7v/v+QAQAOw==',
-    'folder': b'R0lGODlhEAAQAJEAAP///wAAAP///wAAACH5BAEAAAIALAAAAAAQABAAAAIolI+py+0Po5x00osBTfD2jXHg93Ei+aCmmqKcy7LzC8N0JEN7v/v+QAQAOw=='
+    'clean': "🧹",
+    'chat': "💬",
+    'fire': "🔥",
+    'folder': "📁",
+    'box': "📦",
+    'search': "🔎",
+    'sys': "💻",
+    'app': "🧩",
+    'bin': "🗑️",
+    'secure': "🛡️",
+    'mail': "📧",
+    'key': "🔑",
+    'cmd': "⌨️"
 }
 
 def is_admin():
@@ -31,4 +36,5 @@ def format_size(size):
     return f"{size:.2f} TB"
 
 def get_icons():
-    return {k: tk.PhotoImage(data=v) for k, v in ICONS.items()}
+    # 现在直接返回文字字符，性能更高，视觉更佳
+    return ICONS
