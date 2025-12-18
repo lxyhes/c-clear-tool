@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0078D4"/>
+      <stop offset="100%" style="stop-color:#00BCF2"/>
+    </linearGradient>
+    <linearGradient id="diskGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#FFFFFF"/>
+      <stop offset="100%" style="stop-color:#E0E0E0"/>
+    </linearGradient>
+    <linearGradient id="shineGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FFFFFF;stop-opacity:0.4"/>
+      <stop offset="100%" style="stop-color:#FFFFFF;stop-opacity:0"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+  
+  <!-- 背景圆角矩形 -->
+  <rect x="32" y="32" width="448" height="448" rx="80" ry="80" fill="url(#bgGrad)" filter="url(#shadow)"/>
+  
+  <!-- 高光效果 -->
+  <ellipse cx="200" cy="150" rx="150" ry="80" fill="url(#shineGrad)"/>
+  
+  <!-- C盘图标 - 硬盘形状 -->
+  <g transform="translate(256, 240)">
+    <!-- 硬盘主体 -->
+    <rect x="-140" y="-80" width="280" height="160" rx="20" ry="20" fill="url(#diskGrad)" filter="url(#shadow)"/>
+    
+    <!-- 硬盘细节线条 -->
+    <rect x="-120" y="-60" width="180" height="8" rx="4" fill="#CCCCCC"/>
+    <rect x="-120" y="-40" width="140" height="8" rx="4" fill="#CCCCCC"/>
+    <rect x="-120" y="-20" width="100" height="8" rx="4" fill="#CCCCCC"/>
+    
+    <!-- 指示灯 -->
+    <circle cx="100" cy="-50" r="12" fill="#00E676"/>
+    <circle cx="100" cy="-50" r="6" fill="#69F0AE"/>
+    
+    <!-- C: 文字 -->
+    <text x="-80" y="55" font-family="Segoe UI, Arial" font-size="56" font-weight="bold" fill="#0078D4">C:</text>
+  </g>
+  
+  <!-- 清扫扫帚/刷子效果 -->
+  <g transform="translate(340, 340) rotate(-30)">
+    <!-- 刷子柄 -->
+    <rect x="-12" y="-100" width="24" height="80" rx="6" fill="#FF9800"/>
+    <rect x="-12" y="-100" width="24" height="20" rx="6" fill="#FFB74D"/>
+    
+    <!-- 刷子头 -->
+    <rect x="-30" y="-25" width="60" height="50" rx="8" fill="#795548"/>
+    <rect x="-25" y="15" width="8" height="25" rx="2" fill="#5D4037"/>
+    <rect x="-10" y="15" width="8" height="30" rx="2" fill="#5D4037"/>
+    <rect x="5" y="15" width="8" height="25" rx="2" fill="#5D4037"/>
+    <rect x="17" y="15" width="8" height="28" rx="2" fill="#5D4037"/>
+  </g>
+  
+  <!-- 闪光星星效果 -->
+  <g fill="#FFFFFF">
+    <polygon points="420,120 425,135 440,135 428,145 433,160 420,150 407,160 412,145 400,135 415,135" opacity="0.9"/>
+    <polygon points="130,350 133,360 143,360 135,367 138,377 130,370 122,377 125,367 117,360 127,360" opacity="0.7" transform="scale(0.8)"/>
+  </g>
+  
+  <!-- 清理粒子效果 -->
+  <g fill="#FFFFFF" opacity="0.6">
+    <circle cx="380" cy="200" r="6"/>
+    <circle cx="400" cy="240" r="4"/>
+    <circle cx="360" cy="180" r="5"/>
+    <circle cx="420" cy="280" r="3"/>
+  </g>
+</svg>
