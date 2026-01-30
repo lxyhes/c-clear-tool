@@ -28,6 +28,9 @@ class SystemCleaner:
             {"name": "预读取文件", "path": os.path.join(self.system_root, "Prefetch"), "cat": "系统垃圾", "soft": "Windows"},
             {"name": "系统更新缓存", "path": os.path.join(self.system_root, "SoftwareDistribution", "Download"), "cat": "系统垃圾", "soft": "Windows Update"},
             {"name": "错误报告", "path": os.path.join(self.local_appdata, "Microsoft", "Windows", "WER"), "cat": "系统垃圾", "soft": "Error Reporting"},
+            {"name": "系统日志", "path": os.path.join(self.system_root, "Logs"), "cat": "系统垃圾", "soft": "Windows"},
+            {"name": "调试文件", "path": os.path.join(self.system_root, "Debug"), "cat": "系统垃圾", "soft": "Windows"},
+            {"name": "崩溃转储", "path": os.path.join(self.system_root, "Minidump"), "cat": "系统垃圾", "soft": "Windows"},
         ]
         
         self.safe_keywords = ['cache', 'temp', 'log', 'logs', 'dump', 'crashes', 'crashpad', 'shadercache']
@@ -62,6 +65,24 @@ class SystemCleaner:
             # 音乐软件
             {"name": "网易云音乐", "paths": [os.path.join(self.local_appdata, "Netease/CloudMusic")], "cat": "音乐软件", "subs": ["Cache", "webdata/Cache"]},
             {"name": "QQ音乐", "paths": [os.path.join(self.roaming_appdata, "Tencent/QQMusic")], "cat": "音乐软件", "subs": ["Cache", "Temp"]},
+            # 视频软件
+            {"name": "爱奇艺", "paths": [os.path.join(self.local_appdata, "iQIYI")], "cat": "视频软件", "subs": ["Cache", "log"]},
+            {"name": "腾讯视频", "paths": [os.path.join(self.local_appdata, "Tencent/QQLive")], "cat": "视频软件", "subs": ["Cache", "Download"]},
+            {"name": "优酷", "paths": [os.path.join(self.local_appdata, "Youku")], "cat": "视频软件", "subs": ["Cache", "download"]},
+            {"name": "Bilibili", "paths": [os.path.join(self.local_appdata, "Bilibili")], "cat": "视频软件", "subs": ["Cache", "download"]},
+            # 下载工具
+            {"name": "迅雷", "paths": [os.path.join(self.local_appdata, "Thunder"), os.path.join(self.local_appdata, "Xunlei")], "cat": "下载工具", "subs": ["Download", "Cache", "Temp"]},
+            {"name": "Internet Download Manager", "paths": [os.path.join(self.local_appdata, "IDM")], "cat": "下载工具", "subs": []},
+            # 压缩软件
+            {"name": "7-Zip", "paths": [os.path.join(self.local_appdata, "7-Zip")], "cat": "工具软件", "subs": ["Temp"]},
+            {"name": "WinRAR", "paths": [os.path.join(self.local_appdata, "WinRAR")], "cat": "工具软件", "subs": ["Temp"]},
+            {"name": "Bandizip", "paths": [os.path.join(self.local_appdata, "Bandisoft", "Bandizip")], "cat": "工具软件", "subs": ["Temp"]},
+            # 办公软件
+            {"name": "WPS Office", "paths": [os.path.join(self.local_appdata, "Kingsoft", "WPS", "Office6", "cache")], "cat": "办公软件", "subs": []},
+            {"name": "Microsoft Office", "paths": [os.path.join(self.local_appdata, "Microsoft", "Office", "16.0", "OfficeFileCache")], "cat": "办公软件", "subs": []},
+            # 设计软件
+            {"name": "Adobe Cache", "paths": [os.path.join(self.local_appdata, "Adobe")], "cat": "设计软件", "subs": ["Cache", "temp"]},
+            {"name": "Lightroom", "paths": [os.path.join(self.roaming_appdata, "Adobe", "Lightroom", "Settings")], "cat": "设计软件", "subs": ["Cache"]},
             # IDE缓存
             {"name": "VS Code", "paths": [os.path.join(self.roaming_appdata, "Code")], "cat": "开发工具", "subs": ["Cache", "CachedData", "CachedExtensions", "CachedExtensionVSIXs", "logs"]},
             {"name": "JetBrains", "paths": [os.path.join(self.local_appdata, "JetBrains")], "cat": "开发工具", "subs": []},
@@ -72,6 +93,8 @@ class SystemCleaner:
             {"name": "Docker镜像", "paths": [os.path.join(self.local_appdata, "Docker/wsl")], "cat": "开发缓存", "subs": []},
             {"name": "Maven缓存", "paths": [os.path.join(self.user_profile, ".m2/repository")], "cat": "开发缓存", "subs": []},
             {"name": "Gradle缓存", "paths": [os.path.join(self.user_profile, ".gradle/caches")], "cat": "开发缓存", "subs": []},
+            # 系统安全
+            {"name": "Windows Defender", "paths": [os.path.join(os.environ["PROGRAMDATA"], "Microsoft", "Windows Defender", "Scans", "History"), os.path.join(os.environ["PROGRAMDATA"], "Microsoft", "Windows Defender", "Support")], "cat": "系统安全", "subs": []},
         ]
         
         # 扫描进度追踪
@@ -149,14 +172,17 @@ class SystemCleaner:
         self.scan_progress["current"] = 0
         self.scan_progress["total"] = self.estimate_scan_total("junk")
         
+        # 扫描所有分区的回收站
         try:
             rb_size = 0
-            for drive_idx in range(26):
-                drive = chr(ord('A') + drive_idx) + ":/"
-                root = os.path.join(drive, "$Recycle.Bin")
-                if os.path.exists(root): rb_size += self.get_dir_size_fast(root)
+            bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+            for i in range(26):
+                if bitmask & (1 << i):
+                    drive = chr(ord('A') + i) + ":/"
+                    root = os.path.join(drive, "$Recycle.Bin")
+                    if os.path.exists(root): rb_size += self.get_dir_size_fast(root)
             if rb_size > 0:
-                yield {"type": "item", "data": {"cat": "特别清理", "soft": "回收站", "detail": "已删除文件", "path": "RECYCLE_BIN_SPECIAL", "raw_size": rb_size, "display_size": format_size(rb_size)}}
+                yield {"type": "item", "data": {"cat": "特别清理", "soft": "回收站", "detail": "所有分区已删除文件", "path": "RECYCLE_BIN_SPECIAL", "raw_size": rb_size, "display_size": format_size(rb_size)}}
         except: pass
 
         for item in self.base_targets:
@@ -520,11 +546,21 @@ class SystemCleaner:
         cat, soft = "其他应用", name
         app_map = {
             'google': ('浏览器缓存', 'Google Chrome'), 'chrome': ('浏览器缓存', 'Google Chrome'), 'edge': ('浏览器缓存', 'Edge'),
-            'microsoft': ('应用缓存', 'Microsoft Apps'), 'tencent': ('社交通讯', '腾讯软件'), 'wechat': ('社交通讯', '微信 WeChat'), 
+            'microsoft': ('应用缓存', 'Microsoft Apps'), 'tencent': ('社交通讯', '腾讯软件'), 'wechat': ('社交通讯', '微信 WeChat'),
             'dingtalk': ('办公软件', '钉钉'), 'feishu': ('办公软件', '飞书'), 'adobe': ('设计工具', 'Adobe'), 'steam': ('游戏平台', 'Steam'),
             'discord': ('通讯软件', 'Discord'), 'telegram': ('通讯软件', 'Telegram'), 'slack': ('通讯软件', 'Slack'),
             'jetbrains': ('开发工具', 'JetBrains IDE'), 'vscode': ('开发工具', 'VS Code'), 'code': ('开发工具', 'VS Code'),
             'netease': ('音乐软件', '网易云音乐'), 'qqmusic': ('音乐软件', 'QQ音乐'),
+            # 视频软件
+            'iqiyi': ('视频软件', '爱奇艺'), 'qqlive': ('视频软件', '腾讯视频'), 'youku': ('视频软件', '优酷'), 'bilibili': ('视频软件', 'Bilibili'),
+            # 下载工具
+            'thunder': ('下载工具', '迅雷'), 'xunlei': ('下载工具', '迅雷'), 'idm': ('下载工具', 'Internet Download Manager'),
+            # 压缩软件
+            '7-zip': ('工具软件', '7-Zip'), 'winrar': ('工具软件', 'WinRAR'), 'bandizip': ('工具软件', 'Bandizip'),
+            # 办公软件
+            'kingsoft': ('办公软件', 'WPS Office'), 'wps': ('办公软件', 'WPS Office'),
+            # 系统安全
+            'defender': ('系统安全', 'Windows Defender'),
         }
         for key, (c, s) in app_map.items():
             if key in name_lower: cat, soft = c, s; break

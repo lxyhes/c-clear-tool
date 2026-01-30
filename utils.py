@@ -38,7 +38,13 @@ ICONS = {
     'empty': "📂",
     'duplicate': "🔄",
     'clipboard': "📋",
-    'browser': "🌐"
+    'browser': "🌐",
+    # 新增分类图标
+    'video': "🎬",
+    'download': "⬇️",
+    'tool': "🔧",
+    'office': "📄",
+    'security': "🔐"
 }
 
 def is_admin():

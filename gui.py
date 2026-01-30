@@ -586,14 +586,17 @@ class CleanerGUI:
                 elif m_type == "done":
                     self.progress_frame.pack_forget()
                     if self.current_mode in ["junk", "social", "custom", "resign", "duplicate", "empty", "shortcut", "game", "phone", "browser_ext", "clipboard"]:
-                        if self.total_scan_size == 0: self.lbl_title.config(text="系统很干净")
+                        if self.total_scan_size == 0:
+                            self.lbl_title.config(text="系统很干净")
+                            self.btn_action.config(state="disabled", text="开始扫描", bg=self.colors["accent"])
                         else:
                             self.update_junk_tree_stats()
                             self.lbl_title.config(text=f"共发现 {utils.format_size(self.total_scan_size)}")
-                    else: 
+                            self.btn_action.config(text="立即清理")
+                            self.update_btn_state()
+                    else:
                         self.lbl_title.config(text="扫描完成")
                         self.update_btn_state()
-                    self.btn_action.config(state="disabled", text="立即清理")
                     self.status_bar.config(text="  Scan completed.")
                     return
         except Empty: pass
@@ -613,6 +616,11 @@ class CleanerGUI:
         elif "邮件" in data['cat']: cat_icon = self.icons.get('mail')
         elif "云端" in data['cat']: cat_icon = self.icons.get('cloud')
         elif "音乐" in data['cat']: cat_icon = self.icons.get('music')
+        elif "视频" in data['cat']: cat_icon = self.icons.get('video')
+        elif "下载" in data['cat']: cat_icon = self.icons.get('download')
+        elif "工具" in data['cat']: cat_icon = self.icons.get('tool')
+        elif "办公" in data['cat']: cat_icon = self.icons.get('office')
+        elif "系统安全" in data['cat']: cat_icon = self.icons.get('security')
         elif "开发" in data['cat']: cat_icon = self.icons.get('dev')
 
         cat_id = f"cat_{data['cat']}"
@@ -761,7 +769,17 @@ class CleanerGUI:
                     messagebox.showinfo("完成", info)
                     for s in list(self.tree.selection()):
                         if self.tree.exists(s): self.tree.delete(s)
-                    self.btn_action.config(state="normal", text="开始扫描"); self.lbl_title.config(text="操作完成")
+
+                    # 检查是否还有剩余项
+                    remaining_items = len([n for n in self.node_map.keys() if self.tree.exists(n)])
+                    if remaining_items > 0:
+                        self.btn_action.config(text="立即清理")
+                        self.lbl_title.config(text=f"剩余 {remaining_items} 项待清理")
+                        self.update_btn_state()
+                    else:
+                        self.btn_action.config(state="normal", text="开始扫描", bg=self.colors["accent"])
+                        self.lbl_title.config(text="操作完成")
+
                     self.status_bar.config(text="  Operation finished.")
                     
                     # 检查是否需要自动锁屏
