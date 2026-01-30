@@ -16,6 +16,13 @@ class SystemCleaner:
         self.system_root = os.environ['SystemRoot']
         self.downloads = os.path.join(self.user_profile, "Downloads")
         
+        # 敏感路径列表（需要二次确认）
+        self.SENSITIVE_PATHS = [
+            "important", "重要", "backup", "备份", "项目", "project", "work", "工作",
+            "source", "源码", "code", "代码", "data", "数据", "database", "数据库",
+            "config", "配置", "setting", "设置", "key", "密钥", "secret", "机密"
+        ]
+        
         self.SYSTEM_EXCLUDE = {
             'windows', 'program files', 'program files (x86)', 'programdata',
             'winsxs', 'system32', 'syswow64', 'drivers', 'driverstore',
@@ -95,6 +102,26 @@ class SystemCleaner:
             {"name": "Gradle缓存", "paths": [os.path.join(self.user_profile, ".gradle/caches")], "cat": "开发缓存", "subs": []},
             # 系统安全
             {"name": "Windows Defender", "paths": [os.path.join(os.environ["PROGRAMDATA"], "Microsoft", "Windows Defender", "Scans", "History"), os.path.join(os.environ["PROGRAMDATA"], "Microsoft", "Windows Defender", "Support")], "cat": "系统安全", "subs": []},
+            # Docker/WSL
+            {"name": "Docker WSL", "paths": [os.path.join(self.local_appdata, "Docker", "wsl")], "cat": "虚拟化", "subs": ["data", "distro", "tmp"]},
+            {"name": "WSL Linux", "paths": [os.path.join(self.local_appdata, "Packages", "CanonicalGroupLimited")], "cat": "虚拟化", "subs": []},
+            # 开发缓存
+            {"name": "Node.js 缓存", "paths": [os.path.join(self.roaming_appdata, "npm-cache"), os.path.join(self.local_appdata, "npm-cache")], "cat": "开发缓存", "subs": []},
+            {"name": "Yarn 缓存", "paths": [os.path.join(self.roaming_appdata, "Yarn", "Cache"), os.path.join(self.local_appdata, "Yarn", "Cache")], "cat": "开发缓存", "subs": []},
+            {"name": "NuGet 缓存", "paths": [os.path.join(self.user_profile, ".nuget", "packages")], "cat": "开发缓存", "subs": []},
+            {"name": "pip 缓存", "paths": [os.path.join(self.local_appdata, "pip")], "cat": "开发缓存", "subs": ["cache"]},
+            {"name": "Python 缓存", "paths": [os.path.join(self.user_profile, ".pytest_cache"), os.path.join(self.user_profile, ".mypy_cache")], "cat": "开发缓存", "subs": []},
+            # IDE缓存
+            {"name": "Android Studio", "paths": [os.path.join(self.user_profile, ".android", "cache"), os.path.join(self.user_profile, ".AndroidStudio", "system", "log")], "cat": "开发工具", "subs": []},
+            {"name": "IntelliJ IDEA", "paths": [os.path.join(self.user_profile, ".IntelliJIdea")], "cat": "开发工具", "subs": ["system", "log", "caches"]},
+            {"name": "PyCharm", "paths": [os.path.join(self.user_profile, ".PyCharm")], "cat": "开发工具", "subs": ["system", "log", "caches"]},
+            {"name": "VS Code", "paths": [os.path.join(self.roaming_appdata, "Code", "User", "workspaceStorage", "backup")], "cat": "开发工具", "subs": []},
+            # Windows 相关
+            {"name": "Windows Store", "paths": [os.path.join(self.local_appdata, "Packages", "LocalCache")], "cat": "系统缓存", "subs": []},
+            {"name": "Windows 资源管理器缓存", "paths": [os.path.join(self.local_appdata, "Microsoft", "Windows", "Explorer")], "cat": "系统缓存", "subs": ["IconCache", "ThumbnailCache"]},
+            # 虚拟机
+            {"name": "VMware", "paths": [os.path.join(self.user_profile, ".vmware")], "cat": "虚拟化", "subs": ["cache", "logs"]},
+            {"name": "VirtualBox", "paths": [os.path.join(self.user_profile, ".VirtualBox")], "cat": "虚拟化", "subs": ["cache", "logs"]},
         ]
         
         # 扫描进度追踪
@@ -644,6 +671,59 @@ class SystemCleaner:
                         })
                     except: pass
         return disks
+
+    def scan_system_restore_points(self):
+        """扫描系统还原点"""
+        try:
+            output = subprocess.check_output('vssadmin list shadows', shell=True, capture_output=True).decode('gbk', errors='ignore')
+            restore_points = []
+            for line in output.split('\n'):
+                if 'Shadow Copy Volume' in line or '原始卷' in line:
+                    restore_points.append(line.strip())
+            if restore_points:
+                yield {"type": "item", "data": {
+                    "cat": "系统还原点",
+                    "soft": "Windows",
+                    "detail": f"发现 {len(restore_points)} 个还原点",
+                    "path": "SYSTEM_RESTORE_SPECIAL",
+                    "raw_size": len(restore_points) * 1024 * 1024,  # 估算每个还原点至少1GB
+                    "display_size": f"{len(restore_points)} 个"
+                }}
+        except: pass
+
+    def clean_system_restore_points(self, keep_count=1):
+        """清理系统还原点，保留最近的几个"""
+        try:
+            # 使用 vssadmin 删除除最近外的所有还原点
+            cmd = f'vssadmin delete shadows /for=C: /older={keep_count} /quiet'
+            subprocess.run(cmd, shell=True, capture_output=True)
+            return True
+        except: return False
+
+    def is_sensitive_path(self, path):
+        """检测是否为敏感路径"""
+        path_lower = path.lower()
+        filename = os.path.basename(path).lower()
+        
+        # 检查路径中是否包含敏感关键词
+        for keyword in self.SENSITIVE_PATHS:
+            if keyword in path_lower or keyword in filename:
+                return True
+        
+        # 检查是否为重要文档类型
+        important_extensions = ['.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.pdf', '.sqlite', '.db']
+        if os.path.splitext(path)[1].lower() in important_extensions:
+            return True
+        
+        return False
+
+    def get_sensitive_items(self, paths):
+        """获取需要二次确认的敏感项"""
+        sensitive = []
+        for path in paths:
+            if self.is_sensitive_path(path):
+                sensitive.append(path)
+        return sensitive
 
     # ==================== 新增功能 v6.5 ====================
     

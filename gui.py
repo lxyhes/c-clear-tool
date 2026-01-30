@@ -823,6 +823,30 @@ class CleanerGUI:
         vals = self.tree.item(item)['values']
         if not vals: return
         idx = 1 if self.current_mode in ["junk", "social", "custom", "resign", "large"] else 2
+
+    def save_to_cache(self):
+        """保存当前扫描结果到缓存"""
+        cache_key = '_'.join(self.custom_paths) if self.custom_paths else ''
+        self.scan_cache.set(self.current_mode, cache_key, {
+            'large_files': self.large_files_cache,
+            'node_map': self.node_map,
+            'total_size': self.total_scan_size
+        })
+
+    def load_from_cache(self, cache_data):
+        """从缓存加载扫描结果"""
+        self.tree.delete(*self.tree.get_children())
+        self.large_files_cache = cache_data.get('large_files', [])
+        self.node_map = cache_data.get('node_map', {})
+        self.total_scan_size = cache_data.get('total_size', 0)
+        
+        for f in self.large_files_cache:
+            tag = self.get_size_tag(f['raw_size'])
+            self.tree.insert("", "end", values=(f['name'], f['path'], f['display_size']), tags=(tag,))
+        
+        self.lbl_title.config(text=f"共发现 {len(self.large_files_cache)} 个大文件（缓存）")
+        self.btn_action.config(state="normal", text="移动/删除", bg=self.colors["accent"])
+        self.status_bar.config(text="  Loaded from cache.")
         path = vals[idx] if len(vals) > idx else None
         if path and os.path.exists(path):
             try:
