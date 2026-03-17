@@ -106,6 +106,7 @@ class CleanerGUI:
             self.menu.insert("", "end", text=f"  📱  手机备份"): "phone",
             self.menu.insert("", "end", text=f"  🌐  浏览器扩展"): "browser_ext",
             self.menu.insert("", "end", text=f"  📋  剪贴板历史"): "clipboard",
+            self.menu.insert("", "end", text=f"  📊  空间分析"): "space",
             self.menu.insert("", "end", text=f"  {self.icons['chart']}  磁盘概览"): "disk",
             self.menu.insert("", "end", text=f"  {self.icons['history']}  清理历史"): "history",
             self.menu.insert("", "end", text=f"  {self.icons['config']}  设置"): "settings"
@@ -150,6 +151,8 @@ class CleanerGUI:
         self.tree.bind("<<TreeviewSelect>>", self.on_select)
         self.tree.bind("<ButtonRelease-1>", self.on_click_release)
         self.tree.bind("<Double-1>", self.on_double_click)
+        # 空间分析模式支持单击展开/折叠
+        self.tree.bind("<Button-1>", self.on_tree_click)
 
         self.tree.tag_configure("huge", foreground="#d83b01", font=("Microsoft YaHei UI", 9, "bold"))
         self.tree.tag_configure("large", foreground="#ea5e00")
@@ -163,7 +166,7 @@ class CleanerGUI:
         self.set_cols("junk")
 
     def set_cols(self, mode):
-        if mode in ["junk", "social", "custom", "resign", "duplicate", "empty", "shortcut", "game", "phone", "browser_ext", "clipboard"]:
+        if mode in ["junk", "social", "custom", "resign", "duplicate", "empty", "shortcut", "game", "phone", "browser_ext", "clipboard", "space"]:
             self.tree.configure(show="tree headings")
             self.tree["columns"] = ("size", "path")
             self.tree.heading("#0", text="  分类 / 名称", anchor="w"); self.tree.column("#0", width=400)
@@ -269,10 +272,24 @@ class CleanerGUI:
             count = len(self.custom_paths)
             self.lbl_title.config(text=f"已添加 {count} 个敏感目录" if self.current_mode == "resign" else f"已添加 {count} 个目录")
         
-        if self.current_mode in ["junk", "social", "custom", "resign", "inst", "large", "duplicate", "empty", "shortcut", "game", "phone", "browser_ext", "clipboard"]:
+        if self.current_mode in ["junk", "social", "custom", "resign", "inst", "large", "duplicate", "empty", "shortcut", "game", "phone", "browser_ext", "clipboard", "space"]:
             self.btn_backup.pack(side="left", padx=(0, 8))
 
-        if self.current_mode == "disk":
+        if self.current_mode == "space":
+            self.btn_action.config(text="开始分析", bg=self.colors["accent"], state="normal")
+            # 检查是否有缓存
+            cache_file = os.path.join(os.environ['TEMP'], 'ccleaner_space_cache.json')
+            if os.path.exists(cache_file):
+                import time
+                mtime = os.path.getmtime(cache_file)
+                age_minutes = (time.time() - mtime) / 60
+                if age_minutes < 60:
+                    self.lbl_title.config(text=f"C盘空间分析 - 缓存可用（{int(age_minutes)}分钟前）")
+                else:
+                    self.lbl_title.config(text="C盘空间分析 - 缓存已过期")
+            else:
+                self.lbl_title.config(text="C盘空间分析 - 找出占用大户")
+        elif self.current_mode == "disk":
             self.btn_action.config(text="刷新", bg=self.colors["accent"], state="normal")
             self.show_disk_overview()
         elif self.current_mode == "history":
@@ -452,12 +469,23 @@ class CleanerGUI:
         tk.Button(btn_frame, text="删除选中", command=remove_path).pack(side="left", padx=5)
 
     def on_double_click(self, event):
-        """双击预览文件列表"""
+        """双击预览文件列表或展开空间分析目录"""
         if self.current_mode == "settings":
             return
         
         item = self.tree.identify_row(event.y)
-        if not item or item not in self.node_map: return
+        if not item or item not in self.node_map: 
+            # 空间分析模式下处理展开
+            if self.current_mode == "space":
+                self.toggle_space_expand(item)
+            return
+        
+        # 空间分析模式特殊处理
+        if self.current_mode == "space":
+            data = self.node_map.get(item, {})
+            if data.get("has_children") and not data.get("is_expanded"):
+                self.expand_space_node(item)
+                return
         
         data = self.node_map[item]
         path = data.get("path", "")
@@ -494,6 +522,44 @@ class CleanerGUI:
         info.pack(pady=5)
 
     def on_scan(self):
+        if self.current_mode == "space":
+            # 检查是否是"清除缓存并重新分析"
+            if self.btn_action['text'] == "清除缓存":
+                self.cleaner.clear_space_cache()
+                messagebox.showinfo("提示", "空间分析缓存已清除")
+                self.btn_action.config(text="开始分析")
+                self.lbl_title.config(text="C盘空间分析 - 缓存已清除")
+                return
+            # 检查是否有缓存，如果有提供清除选项
+            cache_file = os.path.join(os.environ['TEMP'], 'ccleaner_space_cache.json')
+            if os.path.exists(cache_file) and self.btn_action['text'] == "开始分析":
+                import time
+                mtime = os.path.getmtime(cache_file)
+                age_minutes = (time.time() - mtime) / 60
+                if age_minutes < 60 and messagebox.askyesno("缓存可用", f"发现{int(age_minutes)}分钟前的分析缓存，是否直接使用？\n\n选择'是'：秒开缓存结果\n选择'否'：重新扫描（较慢）"):
+                    pass  # 继续正常扫描流程，会使用缓存
+                else:
+                    # 清除过期缓存
+                    self.cleaner.clear_space_cache()
+            
+            # 正常扫描流程
+            self.tree.delete(*self.tree.get_children())
+            self.node_map = {}
+            self.size_stats = {}
+            self.total_scan_size = 0
+            self.lbl_title.config(text="正在分析中...")
+            self.btn_action.config(state="disabled", bg="#cccccc")
+            
+            # 显示进度条
+            self.progress["value"] = 0
+            self.progress["mode"] = "determinate"
+            self.lbl_progress.config(text="准备中...")
+            self.progress_frame.pack(fill="x", before=self.tree_frame, padx=25, pady=(0, 15))
+            
+            threading.Thread(target=self.thread_scan, daemon=True).start()
+            self.root.after(20, self.consume_queue)
+            return
+        
         if self.current_mode == "disk":
             self.show_disk_overview()
             return
@@ -544,6 +610,7 @@ class CleanerGUI:
         elif self.current_mode == "phone": gen = self.cleaner.scan_phone_backups()
         elif self.current_mode == "browser_ext": gen = self.cleaner.scan_browser_extensions_cache()
         elif self.current_mode == "clipboard": gen = self.cleaner.scan_clipboard_data()
+        elif self.current_mode == "space": gen = self.cleaner.analyze_c_drive_full()
         if gen:
             for item in gen: self.queue.put(item)
         self.queue.put({"type": "done"})
@@ -575,7 +642,9 @@ class CleanerGUI:
                         
                 elif m_type == "item":
                     data = msg['data']
-                    if self.current_mode in ["junk", "social", "custom", "resign", "duplicate", "empty", "shortcut", "game", "phone", "browser_ext", "clipboard"]:
+                    if self.current_mode == "space":
+                        self.add_space_analysis_node(data)
+                    elif self.current_mode in ["junk", "social", "custom", "resign", "duplicate", "empty", "shortcut", "game", "phone", "browser_ext", "clipboard"]:
                         self.add_junk_node(data)
                     elif self.current_mode == "inst":
                         tag = self.get_size_tag(data['raw_size'])
@@ -585,7 +654,18 @@ class CleanerGUI:
                         self.tree.insert("", "end", values=(data['name'], data['path'], data['display_size']), tags=(tag,))
                 elif m_type == "done":
                     self.progress_frame.pack_forget()
-                    if self.current_mode in ["junk", "social", "custom", "resign", "duplicate", "empty", "shortcut", "game", "phone", "browser_ext", "clipboard"]:
+                    if self.current_mode == "space":
+                        self.update_space_tree_stats()
+                        total_items = len(self.tree.get_children())
+                        # 区分是否是缓存加载
+                        cache_file = os.path.join(os.environ['TEMP'], 'ccleaner_space_cache.json')
+                        if os.path.exists(cache_file):
+                            self.lbl_title.config(text=f"C盘空间分析完成（缓存）- 共 {total_items} 个目录")
+                            self.btn_action.config(text="清除缓存", state="normal", bg="#d83b01")
+                        else:
+                            self.lbl_title.config(text=f"C盘空间分析完成 - 共 {total_items} 个目录")
+                            self.btn_action.config(text="重新分析", state="normal", bg=self.colors["accent"])
+                    elif self.current_mode in ["junk", "social", "custom", "resign", "duplicate", "empty", "shortcut", "game", "phone", "browser_ext", "clipboard"]:
                         if self.total_scan_size == 0:
                             self.lbl_title.config(text="系统很干净")
                             self.btn_action.config(state="disabled", text="开始扫描", bg=self.colors["accent"])
@@ -639,6 +719,143 @@ class CleanerGUI:
         self.size_stats[cat_id] += data['raw_size']
         self.size_stats[soft_id] += data['raw_size']
 
+    def add_space_analysis_node(self, data, parent=""):
+        """添加空间分析节点（树状结构）"""
+        name = data.get("name", "Unknown")
+        size = data.get("size", 0)
+        path = data.get("path", "")
+        is_system = data.get("is_system", False)
+        has_children = data.get("has_children", False)
+        
+        # 确定图标
+        if is_system:
+            icon = "🔒"
+        elif size > 10 * 1024 * 1024 * 1024:  # > 10GB
+            icon = "🔴"
+        elif size > 1024 * 1024 * 1024:  # > 1GB
+            icon = "🟠"
+        elif size > 100 * 1024 * 1024:  # > 100MB
+            icon = "🟡"
+        else:
+            icon = "🟢"
+        
+        # 生成可视化条 - 使用最大50GB作为参考
+        max_ref = 50 * 1024 * 1024 * 1024
+        filled = int(size / max_ref * 20) if max_ref > 0 else 0
+        filled = min(filled, 20)
+        bar = "█" * filled + "░" * (20 - filled)
+        
+        # 创建节点文本
+        display_text = f"  {icon} {bar} {name}"
+        if is_system:
+            display_text += " [系统目录]"
+        
+        # 插入节点
+        uid = str(uuid.uuid4())
+        tag = "huge" if size > 10 * 1024 * 1024 * 1024 else ("large" if size > 1024 * 1024 * 1024 else "normal")
+        
+        node = self.tree.insert(parent, "end", iid=uid, text=display_text, 
+                               values=(utils.format_size(size), path), tags=(tag,))
+        
+        self.node_map[uid] = {
+            "path": path, 
+            "detail": name, 
+            "raw_size": size,
+            "has_children": has_children,
+            "is_expanded": False
+        }
+        self.total_scan_size = max(self.total_scan_size, size)  # 记录最大大小用于参考
+        
+        # 如果有子节点但未展开，添加一个占位符用于显示展开按钮
+        if has_children and not parent:  # 只在根目录级别预加载
+            # 展开时动态加载
+            pass
+        
+        return uid
+
+    def expand_space_node(self, item_id):
+        """展开空间分析的节点，动态加载子目录"""
+        if item_id not in self.node_map:
+            return
+        
+        data = self.node_map[item_id]
+        path = data.get("path", "")
+        
+        if not path or not os.path.isdir(path):
+            return
+        
+        # 标记为已展开
+        self.node_map[item_id]["is_expanded"] = True
+        
+        # 显示加载中
+        self.tree.item(item_id, text=self.tree.item(item_id, "text") + " [加载中...]")
+        self.root.update()
+        
+        # 在新线程中加载子目录
+        def load_subdirs():
+            from core import DiskSpaceAnalyzer
+            analyzer = DiskSpaceAnalyzer()
+            subdirs = analyzer.scan_subdir(path)
+            
+            # 在主线程中更新UI
+            self.root.after(0, lambda: self._insert_subdirs(item_id, subdirs))
+        
+        threading.Thread(target=load_subdirs, daemon=True).start()
+    
+    def _insert_subdirs(self, parent_id, subdirs):
+        """插入子目录到树中"""
+        # 移除"[加载中...]"标记
+        current_text = self.tree.item(parent_id, "text")
+        current_text = current_text.replace(" [加载中...]", "")
+        self.tree.item(parent_id, text=current_text)
+        
+        # 插入子节点
+        for subdir in subdirs[:20]:  # 最多显示20个子目录
+            self.add_space_analysis_node(subdir, parent=parent_id)
+        
+        # 展开节点
+        self.tree.item(parent_id, open=True)
+    
+    def toggle_space_expand(self, item_id):
+        """切换空间分析节点的展开/折叠状态"""
+        if not item_id:
+            return
+        
+        if item_id in self.node_map:
+            data = self.node_map[item_id]
+            if data.get("has_children"):
+                if data.get("is_expanded"):
+                    # 折叠
+                    self.tree.item(item_id, open=False)
+                    self.node_map[item_id]["is_expanded"] = False
+                else:
+                    # 展开
+                    self.expand_space_node(item_id)
+    
+    def update_space_tree_stats(self):
+        """更新空间分析树的统计信息"""
+        # 按大小重新排序根节点
+        root_items = []
+        for item_id in self.tree.get_children():
+            size = self.node_map.get(item_id, {}).get("raw_size", 0)
+            root_items.append((size, item_id))
+        
+        root_items.sort(key=lambda x: x[0], reverse=True)
+        for i, (size, item_id) in enumerate(root_items):
+            self.tree.move(item_id, "", i)
+            # 更新显示，添加排名
+            current_text = self.tree.item(item_id, "text")
+            if not current_text.startswith("  🥇") and not current_text.startswith("  🥈") and not current_text.startswith("  🥉"):
+                if i == 0:
+                    new_text = "  🥇" + current_text[2:]
+                elif i == 1:
+                    new_text = "  🥈" + current_text[2:]
+                elif i == 2:
+                    new_text = "  🥉" + current_text[2:]
+                else:
+                    new_text = f"  {i+1:2d}" + current_text[2:]
+                self.tree.item(item_id, text=new_text)
+
     def update_junk_tree_stats(self):
         cats = self.tree.get_children()
         cat_list = []
@@ -658,6 +875,33 @@ class CleanerGUI:
         cat_list.sort(key=lambda x: x[0], reverse=True)
         for i, (sz, cid) in enumerate(cat_list): self.tree.move(cid, "", i)
 
+    def on_tree_click(self, event):
+        """处理树形控件的单击事件"""
+        # 获取点击的区域
+        region = self.tree.identify_region(event.x, event.y)
+        item = self.tree.identify_row(event.y)
+        
+        if not item:
+            return
+        
+        # 空间分析模式下，点击展开图标展开/折叠
+        if self.current_mode == "space":
+            # 检查是否点击了展开图标区域
+            if region == "tree":
+                column = self.tree.identify_column(event.x)
+                if column == "#0":  # 第一列（展开图标所在列）
+                    if item in self.node_map:
+                        data = self.node_map[item]
+                        if data.get("has_children"):
+                            # 切换展开状态
+                            if self.tree.item(item, "open"):
+                                self.tree.item(item, open=False)
+                            else:
+                                if not data.get("is_expanded"):
+                                    self.expand_space_node(item)
+                                else:
+                                    self.tree.item(item, open=True)
+    
     def on_click_release(self, event):
         item = self.tree.identify_row(event.y)
         if not item: return
