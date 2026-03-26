@@ -128,6 +128,8 @@ class CleanerGUI:
 
         self.btn_add_path = tk.Button(self.btn_frame, text=" ➕ 添加目录 ", bg="#f0f0f0", fg="#333", font=("Microsoft YaHei UI", 9), relief="flat", padx=15, pady=6, cursor="hand2", command=self.on_add_path)
         self.btn_backup = tk.Button(self.btn_frame, text=" 💾 备份 ", bg="#f0f0f0", fg="#333", font=("Microsoft YaHei UI", 9), relief="flat", padx=15, pady=6, cursor="hand2", command=self.on_backup)
+        self.btn_expand_all = tk.Button(self.btn_frame, text=" ⬇️ 全部展开 ", bg="#f0f0f0", fg="#333", font=("Microsoft YaHei UI", 9), relief="flat", padx=15, pady=6, cursor="hand2", command=self.on_expand_all)
+        self.btn_collapse_all = tk.Button(self.btn_frame, text=" ⬆️ 全部收起 ", bg="#f0f0f0", fg="#333", font=("Microsoft YaHei UI", 9), relief="flat", padx=15, pady=6, cursor="hand2", command=self.on_collapse_all)
         self.btn_action = tk.Button(self.btn_frame, text="  开始扫描  ", bg=self.colors["accent"], fg="white", font=("Microsoft YaHei UI", 10, "bold"), relief="flat", padx=35, pady=10, cursor="hand2", command=self.on_scan)
         self.btn_action.pack(side="right", padx=(12, 0))
 
@@ -218,6 +220,36 @@ class CleanerGUI:
                     count = len(self.custom_paths)
                     self.lbl_title.config(text=f"已添加 {count} 个敏感目录" if self.current_mode == "resign" else f"已添加 {count} 个目录")
 
+    def on_expand_all(self):
+        """全部展开树节点"""
+        def expand_recursive(item):
+            self.tree.item(item, open=True)
+            for child in self.tree.get_children(item):
+                expand_recursive(child)
+        
+        for item in self.tree.get_children():
+            expand_recursive(item)
+        
+        # 空间分析模式下同时更新节点展开状态标记
+        if self.current_mode == "space":
+            for item_id in self.node_map:
+                self.node_map[item_id]["is_expanded"] = True
+
+    def on_collapse_all(self):
+        """全部收起树节点"""
+        def collapse_recursive(item):
+            self.tree.item(item, open=False)
+            for child in self.tree.get_children(item):
+                collapse_recursive(child)
+        
+        for item in self.tree.get_children():
+            collapse_recursive(item)
+        
+        # 空间分析模式下同时更新节点展开状态标记
+        if self.current_mode == "space":
+            for item_id in self.node_map:
+                self.node_map[item_id]["is_expanded"] = False
+
     def on_backup(self):
         """备份选中项目"""
         sel = self.tree.selection()
@@ -266,6 +298,8 @@ class CleanerGUI:
         # 隐藏所有额外按钮
         self.btn_add_path.pack_forget()
         self.btn_backup.pack_forget()
+        self.btn_expand_all.pack_forget()
+        self.btn_collapse_all.pack_forget()
         
         if self.current_mode in ["custom", "resign"]:
             self.btn_add_path.pack(side="left")
@@ -274,6 +308,11 @@ class CleanerGUI:
         
         if self.current_mode in ["junk", "social", "custom", "resign", "inst", "large", "duplicate", "empty", "shortcut", "game", "phone", "browser_ext", "clipboard", "space"]:
             self.btn_backup.pack(side="left", padx=(0, 8))
+        
+        # 树形结构模式下显示展开/收起按钮
+        if self.current_mode in ["junk", "social", "custom", "resign", "duplicate", "empty", "shortcut", "game", "phone", "browser_ext", "clipboard", "space"]:
+            self.btn_expand_all.pack(side="left", padx=(0, 4))
+            self.btn_collapse_all.pack(side="left", padx=(0, 8))
 
         if self.current_mode == "space":
             self.btn_action.config(text="开始分析", bg=self.colors["accent"], state="normal")
