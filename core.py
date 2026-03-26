@@ -593,36 +593,423 @@ class SystemCleaner:
             if key in name_lower: cat, soft = c, s; break
         return cat, soft
 
-    def scan_custom(self, paths):
+    def scan_custom(self, paths, min_file_size=0, max_depth=10, scan_empty=True, aggregate_small=True, find_duplicates=True):
+        """全面增强版自定义扫描 - 彻底检测各类垃圾文件
+        
+        Args:
+            paths: 要扫描的路径列表
+            min_file_size: 最小文件大小（字节），0表示不限制
+            max_depth: 最大扫描深度，0表示无限制
+            scan_empty: 是否扫描空文件和空目录
+            aggregate_small: 是否聚合报告小文件
+            find_duplicates: 是否查找重复文件
+        """
         self.scan_progress["start_time"] = time.time()
         self.scan_progress["current"] = 0
-        self.scan_progress["total"] = len(paths) * 5
+        # 估算总任务数
+        self.scan_progress["total"] = len(paths) * 15
         
-        with ThreadPoolExecutor(max_workers=4) as ex:
-            futures = [ex.submit(self._scan_single_custom, p) for p in paths]
+        # 扩展垃圾文件特征库
+        garbage_patterns = {
+            'extensions': {
+                '.tmp', '.temp', '.cache', '.log', '.logs', '.dmp', '.dump', '.mdmp', '.hdmp',
+                '.old', '.bak', '.backup', '.orig', '.original', '.save', '.sav',
+                '.swp', '.swo', '.swm', '~', '.~', '.chk', '.chkfile', '.gid', '.fts', '.ftg',
+                '.prv', '.sik', '.ilk', '.ncb', '.sdf', '.opensdf', '.tlog', '.lastbuildstate',
+                '.ipch', '.obj', '.pch', '.res', '.idb', '.pdb', '.exp', '.lib', '.manifest',
+                '.metagen', '.cachefile', '.crdownload', '.part', '.partial', '.download',
+                '.thumb', '.thumbnail'
+            },
+            'keywords': [
+                'temp', 'tmp', 'cache', 'log', 'dump', 'crash', 'backup', 'bak', 'old',
+                'obsolete', 'trash', 'recycle', 'download', 'installer', 'setup',
+                'update', 'upgrade', 'preview', 'render', 'index', 'cookie', 'session',
+                'report', 'feedback', 'diagnostics', 'error', 'failure', 'install',
+                'uninstall', 'blob', 'storage', 'datastore', 'repository', 'component',
+                'manifest', 'shader', 'gpu', 'font', 'icon', 'thumb', 'webcache',
+                'iecache', 'inetcache', 'codecache'
+            ],
+            'prefixes': ['~', '.~', 'tmp', 'temp'],
+            'suffixes': ['~', '.tmp', '.temp', '.old', '.bak', '.backup', '.orig', '.save'],
+            'dev_folders': ['__pycache__', '.pytest_cache', '.mypy_cache', 'node_modules', 
+                           '.gradle', 'build', 'dist', '.vs', 'bin', 'obj', 'target', '.git'],
+            'media_folders': ['thumbnails', 'thumbs', 'previews', 'cache', 'shadercache']
+        }
+        
+        # 大文件阈值
+        thresholds = {
+            'huge': 100 * 1024 * 1024,    # 100MB
+            'large': 20 * 1024 * 1024,     # 20MB
+            'medium': 5 * 1024 * 1024,     # 5MB
+            'small_aggregate': 100 * 1024   # 100KB - 小于此值的文件会聚合报告
+        }
+        
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futures = [ex.submit(self._scan_single_custom_v2, p, garbage_patterns, thresholds, 
+                                min_file_size, max_depth, scan_empty, aggregate_small, find_duplicates) 
+                      for p in paths]
             for fut in as_completed(futures):
                 self.scan_progress["current"] += 1
-                yield {"type": "progress", "current": self.scan_progress["current"], "total": self.scan_progress["total"], "start_time": self.scan_progress["start_time"]}
+                yield {"type": "progress", "current": self.scan_progress["current"], 
+                       "total": self.scan_progress["total"], "start_time": self.scan_progress["start_time"]}
                 for item in fut.result(): yield item
 
-    def _scan_single_custom(self, base):
+    def _scan_single_custom_v2(self, base, patterns, thresholds, min_size, max_depth, 
+                                scan_empty, aggregate_small, find_duplicates):
+        """性能优化版单路径扫描 - 使用 os.scandir 和更快的哈希计算"""
         res = []
         if not os.path.exists(base): return res
-        try:
-            for root, dirs, files in os.walk(base):
-                if root.count(os.sep) - base.count(os.sep) > 3: dirs[:] = []; continue
-                cur_name = os.path.basename(root).lower()
-                if any(k in cur_name for k in self.safe_keywords) and not any(k in cur_name for k in self.danger_keywords):
-                    s = self.get_dir_size_fast(root)
-                    if s > 0:
+        
+        # 预编译扩展名集合和关键词集合以提高查找速度
+        ext_set = patterns['extensions']
+        keywords = patterns['keywords']
+        prefixes = tuple(patterns['prefixes'])  # startswith 需要 tuple
+        suffixes = tuple(patterns['suffixes'])  # endswith 需要 tuple
+        dev_folders = patterns['dev_folders']
+        media_folders = patterns['media_folders']
+        
+        # 跟踪已报告的项目
+        reported_items = set()
+        # 目录信息收集器
+        dir_info = {}
+        # 空文件列表
+        empty_files = []
+        # 空目录列表
+        empty_dirs = []
+        # 文件哈希收集器（用于重复检测）- 只检测大文件
+        file_hashes = {}
+        
+        base_lower = base.lower()
+        base_sep_count = base.count(os.sep)
+        
+        # 使用栈实现深度优先遍历，避免递归开销
+        stack = [(base, 0)]  # (path, depth)
+        
+        while stack:
+            current_path, current_depth = stack.pop()
+            
+            if max_depth > 0 and current_depth > max_depth:
+                continue
+            
+            # 跳过系统保护目录
+            current_lower = current_path.lower()
+            if any(ex in current_lower for ex in self.SYSTEM_EXCLUDE):
+                continue
+            
+            try:
+                entries = list(os.scandir(current_path))
+            except (PermissionError, OSError):
+                continue
+            
+            # 分离文件和目录
+            files = []
+            subdirs = []
+            for entry in entries:
+                try:
+                    if entry.is_file(follow_symlinks=False):
+                        files.append(entry)
+                    elif entry.is_dir(follow_symlinks=False):
+                        subdirs.append(entry)
+                except (OSError, PermissionError):
+                    continue
+            
+            # 检测空目录
+            if scan_empty and len(files) == 0 and len(subdirs) == 0:
+                empty_dirs.append(current_path)
+                continue
+            
+            # 将子目录压入栈（反向压入保持顺序）
+            for subdir in reversed(subdirs):
+                stack.append((subdir.path, current_depth + 1))
+            
+            # 初始化目录信息
+            dir_info[current_path] = {
+                'size': 0,
+                'file_count': len(files),
+                'garbage_count': 0,
+                'temp_count': 0,
+                'small_garbage': [],
+                'depth': current_depth
+            }
+            
+            # 检查是否是特殊垃圾目录
+            is_dev_folder = any(folder in current_lower for folder in dev_folders)
+            is_media_folder = any(folder in current_lower for folder in media_folders)
+            
+            # 处理文件
+            for entry in files:
+                try:
+                    stat = entry.stat(follow_symlinks=False)
+                    sz = stat.st_size
+                    
+                    # 检测空文件
+                    if scan_empty and sz == 0:
+                        empty_files.append(entry.path)
+                        continue
+                    
+                    # 跳过小于最小大小的文件
+                    if sz < min_size:
+                        continue
+                    
+                    fname = entry.name
+                    ext = os.path.splitext(fname)[1].lower()
+                    fname_lower = fname.lower()
+                    
+                    # 快速判断是否为垃圾文件
+                    is_garbage = False
+                    garbage_type = None
+                    
+                    # 检查扩展名（最快）
+                    if ext in ext_set:
+                        is_garbage = True
+                        garbage_type = self._classify_garbage_type(ext, fname_lower)
+                    
+                    # 检查关键词
+                    if not is_garbage:
+                        for kw in keywords:
+                            if kw in fname_lower:
+                                is_garbage = True
+                                garbage_type = kw
+                                break
+                    
+                    # 检查前缀和后缀
+                    if not is_garbage:
+                        if fname.startswith(prefixes):
+                            is_garbage = True
+                            garbage_type = "临时文件"
+                        elif fname.endswith(suffixes):
+                            is_garbage = True
+                            garbage_type = "备份文件"
+                    
+                    dir_info[current_path]['size'] += sz
+                    
+                    if is_garbage:
+                        dir_info[current_path]['garbage_count'] += 1
+                        if 'temp' in garbage_type or 'cache' in garbage_type:
+                            dir_info[current_path]['temp_count'] += 1
+                        
+                        # 大文件单独报告
+                        if sz >= thresholds['medium']:
+                            if entry.path not in reported_items:
+                                reported_items.add(entry.path)
+                                cat = "超大垃圾文件" if sz >= thresholds['huge'] else ("大垃圾文件" if sz >= thresholds['large'] else "中等垃圾文件")
+                                res.append({"type": "item", "data": {
+                                    "cat": cat,
+                                    "soft": garbage_type,
+                                    "detail": f"{fname} ({format_size(sz)})",
+                                    "path": entry.path,
+                                    "raw_size": sz,
+                                    "display_size": format_size(sz),
+                                    "depth": current_depth
+                                }})
+                        elif aggregate_small and sz < thresholds['small_aggregate']:
+                            # 小文件加入聚合器
+                            dir_info[current_path]['small_garbage'].append({'name': fname, 'size': sz, 'type': garbage_type})
+                        elif entry.path not in reported_items:
+                            # 中等大小的垃圾文件单独报告
+                            reported_items.add(entry.path)
+                            res.append({"type": "item", "data": {
+                                "cat": f"垃圾文件 ({garbage_type})",
+                                "soft": os.path.basename(base),
+                                "detail": fname,
+                                "path": entry.path,
+                                "raw_size": sz,
+                                "display_size": format_size(sz),
+                                "depth": current_depth
+                            }})
+                    
+                    # 重复文件检测 - 只对大于100KB的文件计算哈希（减少IO）
+                    if find_duplicates and sz > 100 * 1024:
+                        try:
+                            # 使用更快的 xxhash 或只读取前4KB
+                            import hashlib
+                            with open(entry.path, 'rb') as hf:
+                                # 只读取前4KB计算哈希（足够检测大部分重复）
+                                file_hash = hashlib.md5(hf.read(4096)).hexdigest()
+                            if file_hash in file_hashes:
+                                file_hashes[file_hash].append(entry.path)
+                            else:
+                                file_hashes[file_hash] = [entry.path]
+                        except:
+                            pass
+                
+                except (OSError, PermissionError):
+                    continue
+            
+            # 报告特殊垃圾目录
+            if is_dev_folder and dir_info[current_path]['size'] > 5 * 1024 * 1024 and current_path not in reported_items:
+                reported_items.add(current_path)
+                rel_path = os.path.relpath(current_path, base)
+                res.append({"type": "item", "data": {
+                    "cat": "开发缓存目录",
+                    "soft": os.path.basename(base),
+                    "detail": f"{rel_path} ({dir_info[current_path]['file_count']}个文件, {format_size(dir_info[current_path]['size'])})",
+                    "path": current_path,
+                    "raw_size": dir_info[current_path]['size'],
+                    "display_size": format_size(dir_info[current_path]['size']),
+                    "depth": current_depth
+                }})
+            
+            elif is_media_folder and dir_info[current_path]['size'] > 1 * 1024 * 1024 and current_path not in reported_items:
+                reported_items.add(current_path)
+                rel_path = os.path.relpath(current_path, base)
+                res.append({"type": "item", "data": {
+                    "cat": "媒体缓存目录",
+                    "soft": os.path.basename(base),
+                    "detail": f"{rel_path} ({dir_info[current_path]['file_count']}个文件)",
+                    "path": current_path,
+                    "raw_size": dir_info[current_path]['size'],
+                    "display_size": format_size(dir_info[current_path]['size']),
+                    "depth": current_depth
+                }})
+        
+        # 批量报告空文件
+        if scan_empty and empty_files:
+            for ef in empty_files[:100]:
+                depth = ef.count(os.sep) - base_sep_count
+                rel = os.path.relpath(ef, base)
+                res.append({"type": "item", "data": {
+                    "cat": "空文件",
+                    "soft": os.path.basename(base),
+                    "detail": rel,
+                    "path": ef,
+                    "raw_size": 0,
+                    "display_size": "0 B",
+                    "depth": depth
+                }})
+            if len(empty_files) > 100:
+                res.append({"type": "item", "data": {
+                    "cat": "空文件",
+                    "soft": os.path.basename(base),
+                    "detail": f"... 还有 {len(empty_files) - 100} 个空文件",
+                    "path": base,
+                    "raw_size": 0,
+                    "display_size": "0 B",
+                    "depth": 0
+                }})
+        
+        # 批量报告空目录
+        if scan_empty and empty_dirs:
+            for ed in empty_dirs[:50]:
+                depth = ed.count(os.sep) - base_sep_count
+                rel = os.path.relpath(ed, base)
+                res.append({"type": "item", "data": {
+                    "cat": "空目录",
+                    "soft": os.path.basename(base),
+                    "detail": rel,
+                    "path": ed,
+                    "raw_size": 0,
+                    "display_size": "0 B",
+                    "depth": depth
+                }})
+            if len(empty_dirs) > 50:
+                res.append({"type": "item", "data": {
+                    "cat": "空目录",
+                    "soft": os.path.basename(base),
+                    "detail": f"... 还有 {len(empty_dirs) - 50} 个空目录",
+                    "path": base,
+                    "raw_size": 0,
+                    "display_size": "0 B",
+                    "depth": 0
+                }})
+        
+        # 聚合报告小垃圾文件
+        if aggregate_small:
+            for root_path, info in dir_info.items():
+                if info['small_garbage']:
+                    total_small_size = sum(sf['size'] for sf in info['small_garbage'])
+                    if total_small_size > 100 * 1024:  # 只报告超过100KB的聚合
+                        file_types = set(sf['type'] for sf in info['small_garbage'])
+                        rel = os.path.relpath(root_path, base)
                         res.append({"type": "item", "data": {
-                            "cat": "自定义目录", "soft": os.path.basename(base),
-                            "detail": os.path.relpath(root, base), "path": root,
-                            "raw_size": s, "display_size": format_size(s)
+                            "cat": "小垃圾文件聚合",
+                            "soft": os.path.basename(base),
+                            "detail": f"{rel} ({len(info['small_garbage'])}个文件, 类型: {', '.join(list(file_types)[:3])})",
+                            "path": root_path,
+                            "raw_size": total_small_size,
+                            "display_size": format_size(total_small_size),
+                            "depth": info['depth'],
+                            "file_count": len(info['small_garbage'])
                         }})
-                        dirs[:] = []
-        except: pass
+        
+        # 报告重复文件
+        if find_duplicates:
+            for file_hash, file_list in file_hashes.items():
+                if len(file_list) > 1:
+                    try:
+                        first_size = os.path.getsize(file_list[0])
+                        if first_size > 10 * 1024:  # 只报告大于10KB的重复文件
+                            total_dup_size = first_size * (len(file_list) - 1)
+                            res.append({"type": "item", "data": {
+                                "cat": "重复文件",
+                                "soft": os.path.basename(base),
+                                "detail": f"{os.path.basename(file_list[0])} ({len(file_list)}个副本, 可节省 {format_size(total_dup_size)})",
+                                "path": file_list[0],
+                                "raw_size": total_dup_size,
+                                "display_size": format_size(total_dup_size),
+                                "depth": file_list[0].count(os.sep) - base_sep_count,
+                                "duplicates": file_list
+                            }})
+                    except:
+                        pass
+        
+        # 报告高垃圾占比目录
+        for root_path, info in dir_info.items():
+            if info['size'] > 50 * 1024 * 1024 and info['file_count'] > 0:
+                garbage_ratio = info['garbage_count'] / info['file_count']
+                if garbage_ratio > 0.3 and root_path not in reported_items:
+                    rel = os.path.relpath(root_path, base)
+                    res.append({"type": "item", "data": {
+                        "cat": f"高垃圾占比目录 ({garbage_ratio*100:.0f}%)",
+                        "soft": os.path.basename(base),
+                        "detail": f"{rel} ({format_size(info['size'])}, {info['file_count']}个文件)",
+                        "path": root_path,
+                        "raw_size": info['size'],
+                        "display_size": format_size(info['size']),
+                        "depth": info['depth']
+                    }})
+        
         return res
+
+    def _classify_garbage_type(self, ext, fname):
+        """根据扩展名和文件名分类垃圾类型"""
+        ext_lower = ext.lower()
+        fname_lower = fname.lower()
+        
+        temp_exts = {'.tmp', '.temp', '.cache', '.swp', '.swo'}
+        log_exts = {'.log', '.logs'}
+        dump_exts = {'.dmp', '.dump', '.mdmp', '.hdmp'}
+        backup_exts = {'.old', '.bak', '.backup', '.orig', '.original', '.save', '.sav'}
+        dev_exts = {'.obj', '.pch', '.idb', '.pdb', '.ilk', '.ncb', '.sdf', '.ipch', '.tlog'}
+        download_exts = {'.crdownload', '.part', '.partial'}
+        
+        if ext_lower in temp_exts or 'temp' in fname_lower or 'tmp' in fname_lower:
+            return "临时文件"
+        elif ext_lower in log_exts or 'log' in fname_lower:
+            return "日志文件"
+        elif ext_lower in dump_exts or 'crash' in fname_lower or 'dump' in fname_lower:
+            return "崩溃转储"
+        elif ext_lower in backup_exts or 'backup' in fname_lower or 'bak' in fname_lower:
+            return "备份文件"
+        elif ext_lower in dev_exts:
+            return "开发残留"
+        elif ext_lower in download_exts:
+            return "下载残留"
+        else:
+            return "垃圾文件"
+
+    def scan_custom_deep(self, paths):
+        """深度自定义扫描 - 使用新的全面扫描算法，无深度限制，检测更多垃圾"""
+        # 调用新的 scan_custom，参数设置为深度扫描模式
+        # min_file_size=0: 不限制最小文件大小
+        # max_depth=0: 无深度限制
+        # scan_empty=True: 检测空文件和目录
+        # aggregate_small=True: 聚合小文件
+        # find_duplicates=True: 查找重复文件
+        yield from self.scan_custom(paths, min_file_size=0, max_depth=0, 
+                                     scan_empty=True, aggregate_small=True, find_duplicates=True)
+
+
 
     def scan_installers(self):
         if not os.path.exists(self.downloads): return

@@ -1,2 +1,4 @@
 E:\Cache\xwechat_files
 E:\Cache\Wechat
+C:\Users\Administrator\AppData
+C:\Users\Administrator

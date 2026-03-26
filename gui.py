@@ -20,6 +20,7 @@ class CleanerGUI:
         self.current_mode = "junk"
         self.custom_paths_file = "custom_paths.txt"
         self.custom_paths = self.load_custom_paths()
+        self.deep_scan_var = tk.BooleanVar(value=False)  # 深度扫描选项
         
         # 新增管理器
         self.history = CleanHistory()
@@ -130,6 +131,10 @@ class CleanerGUI:
         self.btn_backup = tk.Button(self.btn_frame, text=" 💾 备份 ", bg="#f0f0f0", fg="#333", font=("Microsoft YaHei UI", 9), relief="flat", padx=15, pady=6, cursor="hand2", command=self.on_backup)
         self.btn_expand_all = tk.Button(self.btn_frame, text=" ⬇️ 全部展开 ", bg="#f0f0f0", fg="#333", font=("Microsoft YaHei UI", 9), relief="flat", padx=15, pady=6, cursor="hand2", command=self.on_expand_all)
         self.btn_collapse_all = tk.Button(self.btn_frame, text=" ⬆️ 全部收起 ", bg="#f0f0f0", fg="#333", font=("Microsoft YaHei UI", 9), relief="flat", padx=15, pady=6, cursor="hand2", command=self.on_collapse_all)
+        # 深度扫描复选框
+        self.chk_deep_scan = tk.Checkbutton(self.btn_frame, text=" 🔍 深度扫描 ", variable=self.deep_scan_var, 
+                                            bg="white", fg="#333", font=("Microsoft YaHei UI", 9), 
+                                            selectcolor="white", activebackground="white")
         self.btn_action = tk.Button(self.btn_frame, text="  开始扫描  ", bg=self.colors["accent"], fg="white", font=("Microsoft YaHei UI", 10, "bold"), relief="flat", padx=35, pady=10, cursor="hand2", command=self.on_scan)
         self.btn_action.pack(side="right", padx=(12, 0))
 
@@ -300,11 +305,15 @@ class CleanerGUI:
         self.btn_backup.pack_forget()
         self.btn_expand_all.pack_forget()
         self.btn_collapse_all.pack_forget()
+        self.chk_deep_scan.pack_forget()
         
         if self.current_mode in ["custom", "resign"]:
             self.btn_add_path.pack(side="left")
             count = len(self.custom_paths)
             self.lbl_title.config(text=f"已添加 {count} 个敏感目录" if self.current_mode == "resign" else f"已添加 {count} 个目录")
+            # 仅在自定义扫描模式下显示深度扫描选项
+            if self.current_mode == "custom":
+                self.chk_deep_scan.pack(side="left", padx=(0, 8))
         
         if self.current_mode in ["junk", "social", "custom", "resign", "inst", "large", "duplicate", "empty", "shortcut", "game", "phone", "browser_ext", "clipboard", "space"]:
             self.btn_backup.pack(side="left", padx=(0, 8))
@@ -639,7 +648,12 @@ class CleanerGUI:
         if self.current_mode == "junk": gen = self.cleaner.scan_generator()
         elif self.current_mode == "social": gen = self.cleaner.scan_social_apps()
         elif self.current_mode == "resign": gen = self.cleaner.scan_resignation_targets(self.custom_paths)
-        elif self.current_mode == "custom": gen = self.cleaner.scan_custom(self.custom_paths)
+        elif self.current_mode == "custom": 
+            # 根据深度扫描选项选择扫描方法
+            if self.deep_scan_var.get():
+                gen = self.cleaner.scan_custom_deep(self.custom_paths)
+            else:
+                gen = self.cleaner.scan_custom(self.custom_paths)
         elif self.current_mode == "inst": gen = self.cleaner.scan_installers()
         elif self.current_mode == "large": gen = self.cleaner.scan_large_files()
         elif self.current_mode == "duplicate": gen = self.cleaner.scan_duplicate_files()
