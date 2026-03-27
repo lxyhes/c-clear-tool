@@ -11,6 +11,7 @@ import subprocess
 from core import SystemCleaner
 import utils
 from utils import CleanHistory, ConfigManager, BackupManager
+from media_viewer import MediaViewer
 
 class CleanerGUI:
     def __init__(self, root):
@@ -30,6 +31,10 @@ class CleanerGUI:
         self.node_map = {} 
         self.total_scan_size = 0
         self.size_stats = {}
+        
+        # 媒体文件查看器
+        self.media_viewer = None
+        self.media_files_cache = []
         
         self.icons = utils.get_icons()
         self.setup_style()
@@ -329,6 +334,14 @@ class CleanerGUI:
     def on_menu_change(self, e):
         sel = self.menu.selection()
         if not sel: return
+        
+        # 如果之前有 MediaViewer，清理它
+        if self.media_viewer:
+            self.media_viewer.destroy()
+            self.media_viewer = None
+            # 重新显示 tree_frame
+            self.tree_frame.pack(fill="both", expand=True, padx=25, pady=0)
+        
         self.current_mode = self.menu_items[sel[0]]
         self.tree.delete(*self.tree.get_children())
         self.node_map = {}
@@ -713,21 +726,16 @@ class CleanerGUI:
         if self.current_mode in ["custom", "media"] and not self.custom_paths:
             messagebox.showwarning("提示", "请先添加扫描目录。\n")
             return
+        
+        # 媒体文件检测模式 - 使用 MediaViewer
+        if self.current_mode == "media":
+            self.start_media_scan()
+            return
+        
         self.tree.delete(*self.tree.get_children())
         self.node_map = {}
         self.size_stats = {}
         self.total_scan_size = 0
-        
-        # 根据模式配置 tree 列
-        if self.current_mode == "media":
-            self.tree.configure(show="tree headings")
-            self.tree["columns"] = ("size", "path")
-            self.tree.heading("#0", text="文件名")
-            self.tree.heading("size", text="大小")
-            self.tree.heading("path", text="路径")
-            self.tree.column("#0", width=200)
-            self.tree.column("size", width=100)
-            self.tree.column("path", width=500)
         
         self.lbl_title.config(text="正在分析中...")
         self.btn_action.config(state="disabled", bg="#cccccc")
@@ -740,6 +748,116 @@ class CleanerGUI:
         
         threading.Thread(target=self.thread_scan, daemon=True).start()
         self.root.after(20, self.consume_queue)
+
+    def start_media_scan(self):
+        """开始媒体文件扫描 - 使用 MediaViewer"""
+        # 清空之前的显示
+        self.tree.delete(*self.tree.get_children())
+        
+        # 隐藏默认的 tree_frame，显示 MediaViewer
+        self.tree_frame.pack_forget()
+        
+        # 如果 MediaViewer 已存在，先销毁
+        if self.media_viewer:
+            self.media_viewer.destroy()
+            self.media_viewer = None
+        
+        # 创建 MediaViewer
+        self.media_viewer = MediaViewer(
+            self.tree_frame,
+            on_select=self.on_media_select,
+            on_double_click=self.on_media_double_click
+        )
+        
+        self.lbl_title.config(text="正在扫描媒体文件...")
+        self.btn_action.config(state="disabled", bg="#cccccc")
+        
+        # 显示进度条
+        self.progress["value"] = 0
+        self.progress["mode"] = "determinate"
+        self.lbl_progress.config(text="准备中...")
+        self.progress_frame.pack(fill="x", before=self.tree_frame, padx=25, pady=(0, 15))
+        
+        # 清空缓存
+        self.media_files_cache = []
+        
+        # 启动扫描线程
+        threading.Thread(target=self.thread_media_scan, daemon=True).start()
+        self.root.after(20, self.consume_media_queue)
+
+    def thread_media_scan(self):
+        """媒体文件扫描线程"""
+        gen = self.cleaner.scan_media_files(self.custom_paths)
+        if gen:
+            for item in gen:
+                self.queue.put(item)
+        self.queue.put({"type": "done"})
+
+    def consume_media_queue(self):
+        """处理媒体文件扫描队列"""
+        try:
+            while True:
+                msg = self.queue.get_nowait()
+                m_type = msg.get("type")
+                
+                if m_type == "progress":
+                    current = msg.get("current", 0)
+                    total = msg.get("total", 1)
+                    percent = min(100, int(current / max(total, 1) * 100))
+                    self.progress["value"] = percent
+                    self.lbl_progress.config(text=f"{percent}%")
+                    
+                elif m_type == "item":
+                    data = msg['data']
+                    cat = data.get('cat', '')
+                    # 只收集图片和视频文件（不包括统计信息）
+                    if '图片' in cat or '视频' in cat:
+                        import time
+                        file_info = {
+                            'name': data['detail'],
+                            'path': data['path'],
+                            'size': data['raw_size'],
+                            'display_size': data['display_size'],
+                            'type': '图片' if '图片' in cat else '视频',
+                            'mtime': os.path.getmtime(data['path']) if os.path.exists(data['path']) else 0
+                        }
+                        self.media_files_cache.append(file_info)
+                        
+                elif m_type == "done":
+                    self.progress_frame.pack_forget()
+                    
+                    # 更新 MediaViewer
+                    if self.media_viewer:
+                        self.media_viewer.set_media_files(self.media_files_cache)
+                    
+                    total = len(self.media_files_cache)
+                    if total == 0:
+                        self.lbl_title.config(text="未找到图片或视频文件")
+                    else:
+                        total_size = sum(f['size'] for f in self.media_files_cache)
+                        self.lbl_title.config(text=f"扫描完成 - 共发现 {total} 个媒体文件 ({utils.format_size(total_size)})")
+                    
+                    self.btn_action.config(text="重新扫描", state="normal", bg=self.colors["accent"])
+                    self.status_bar.config(text="  扫描完成")
+                    return
+                    
+        except Empty:
+            pass
+        
+        self.root.after(20, self.consume_media_queue)
+
+    def on_media_select(self, file_info):
+        """媒体文件选择事件"""
+        self.status_bar.config(text=f"  选中: {file_info['path']}")
+
+    def on_media_double_click(self, file_info):
+        """媒体文件双击事件 - 打开文件"""
+        path = file_info['path']
+        if os.path.exists(path):
+            if os.path.isfile(path):
+                subprocess.run(['explorer', '/select,', path])
+            else:
+                os.startfile(path)
 
     def thread_scan(self):
         gen = None
