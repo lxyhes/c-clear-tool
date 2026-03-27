@@ -25,10 +25,7 @@ class MediaViewer:
         # 选中的文件 {文件路径: 是否选中}
         self.selected_files = {}
         
-        # ID 映射 {安全ID: 真实路径}
-        self.id_counter = 0
-        self.id_to_path = {}
-        self.path_to_id = {}
+
         
         # 线程池
         self.executor = ThreadPoolExecutor(max_workers=4)
@@ -37,15 +34,11 @@ class MediaViewer:
         self.setup_ui()
         
     def generate_id(self, path):
-        """生成安全的 Treeview ID"""
-        if path in self.path_to_id:
-            return self.path_to_id[path]
-        
-        self.id_counter += 1
-        safe_id = f"item_{self.id_counter}"
-        self.path_to_id[path] = safe_id
-        self.id_to_path[safe_id] = path
-        return safe_id
+        """生成安全的 Treeview ID - 使用路径哈希"""
+        import hashlib
+        # 使用 MD5 哈希生成唯一 ID，避免特殊字符问题
+        hash_id = hashlib.md5(path.encode('utf-8')).hexdigest()[:16]
+        return f"id_{hash_id}"
         
     def setup_ui(self):
         """创建用户界面"""
@@ -156,11 +149,6 @@ class MediaViewer:
         # 清空 Treeview
         for item in self.tree.get_children():
             self.tree.delete(item)
-        
-        # 重新生成 ID 系统 - 每次刷新都重新分配 ID
-        self.id_counter = 0
-        self.id_to_path = {}
-        self.path_to_id = {}
         
         # 按目录添加文件
         for dir_path, files in sorted(self.media_files_by_dir.items()):
