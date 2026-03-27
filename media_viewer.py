@@ -398,3 +398,8 @@ class MediaViewer:
     def destroy(self):
         """清理资源"""
         self.executor.shutdown(wait=False)
+        # 销毁所有创建的 widget
+        if hasattr(self, 'toolbar') and self.toolbar:
+            self.toolbar.destroy()
+        if hasattr(self, 'tree_frame') and self.tree_frame:
+            self.tree_frame.destroy()

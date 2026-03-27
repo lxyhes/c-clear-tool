@@ -754,15 +754,15 @@ class CleanerGUI:
         # 清空之前的显示
         self.tree.delete(*self.tree.get_children())
         
-        # 隐藏默认的 tree_frame，显示 MediaViewer
-        self.tree_frame.pack_forget()
-        
         # 如果 MediaViewer 已存在，先销毁
         if self.media_viewer:
             self.media_viewer.destroy()
             self.media_viewer = None
         
-        # 创建 MediaViewer
+        # 确保 tree_frame 是可见的
+        self.tree_frame.pack(fill="both", expand=True, padx=25, pady=0)
+        
+        # 创建 MediaViewer（在 tree_frame 内部）
         self.media_viewer = MediaViewer(
             self.tree_frame,
             on_delete_callback=self.on_media_deleted
