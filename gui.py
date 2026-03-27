@@ -243,18 +243,21 @@ class CleanerGUI:
         self.tree.delete(*self.tree.get_children())
         
         # 设置列标题
+        self.tree.configure(show="tree headings")
+        self.tree["columns"] = ("path", "action")
         self.tree.heading("#0", text="已添加的目录")
-        self.tree.heading("col_size", text="路径")
-        self.tree.heading("col_type", text="操作")
-        self.tree.column("col_size", width=400)
-        self.tree.column("col_type", width=80)
+        self.tree.heading("path", text="路径")
+        self.tree.heading("action", text="操作")
+        self.tree.column("#0", width=150)
+        self.tree.column("path", width=500)
+        self.tree.column("action", width=80)
         
         # 显示已添加的目录
         if self.custom_paths:
             for i, path in enumerate(self.custom_paths):
                 item_id = f"path_{i}"
                 self.tree.insert("", "end", iid=item_id, text=f"📁 {os.path.basename(path)}", 
-                                values=(path, "删除"))
+                                values=(path, "双击删除"))
         else:
             self.tree.insert("", "end", text="请点击「添加目录」按钮添加扫描目录", values=("", ""))
 
@@ -354,20 +357,25 @@ class CleanerGUI:
                 self.chk_deep_scan.pack(side="left", padx=(0, 8))
             
             # 显示已添加的目录列表
+            self.tree.configure(show="tree headings")
+            self.tree["columns"] = ("path", "action")
             if self.custom_paths:
                 self.tree.heading("#0", text="已添加的目录")
-                self.tree.heading("col_size", text="路径")
-                self.tree.heading("col_type", text="操作")
-                self.tree.column("col_size", width=400)
-                self.tree.column("col_type", width=80)
+                self.tree.heading("path", text="路径")
+                self.tree.heading("action", text="操作")
+                self.tree.column("#0", width=150)
+                self.tree.column("path", width=500)
+                self.tree.column("action", width=80)
                 for i, path in enumerate(self.custom_paths):
                     item_id = f"path_{i}"
                     self.tree.insert("", "end", iid=item_id, text=f"📁 {os.path.basename(path)}", 
-                                    values=(path, "删除"))
+                                    values=(path, "双击删除"))
             else:
                 self.tree.heading("#0", text="提示")
-                self.tree.heading("col_size", text="说明")
-                self.tree.heading("col_type", text="")
+                self.tree.heading("path", text="说明")
+                self.tree.heading("action", text="")
+                self.tree.column("#0", width=400)
+                self.tree.column("path", width=400)
                 self.tree.insert("", "end", text="请点击「添加目录」按钮添加扫描目录", values=("", ""))
         
         if self.current_mode in ["junk", "social", "custom", "resign", "media", "inst", "large", "duplicate", "empty", "shortcut", "game", "phone", "browser_ext", "clipboard", "space"]:
