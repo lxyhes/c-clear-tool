@@ -1238,7 +1238,27 @@ class CleanerGUI:
     def open_folder(self, item):
         vals = self.tree.item(item)['values']
         if not vals: return
-        idx = 1 if self.current_mode in ["junk", "social", "custom", "resign", "large"] else 2
+        
+        # 根据不同模式获取路径的索引
+        if self.current_mode in ["junk", "social", "custom", "resign", "large"]:
+            idx = 1
+        elif self.current_mode in ["media", "inst"]:
+            idx = 1
+        else:
+            idx = 2
+        
+        # 获取路径并打开文件夹
+        if len(vals) > idx:
+            path = vals[idx]
+            if path and os.path.exists(path):
+                if os.path.isfile(path):
+                    # 如果是文件，打开所在文件夹并选中文件
+                    subprocess.run(['explorer', '/select,', path])
+                else:
+                    # 如果是文件夹，直接打开
+                    os.startfile(path)
+            else:
+                messagebox.showwarning("提示", "文件或目录不存在")
 
     def save_to_cache(self):
         """保存当前扫描结果到缓存"""
