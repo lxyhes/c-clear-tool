@@ -784,11 +784,11 @@ class CleanerGUI:
         self.lbl_title.config(text="正在扫描媒体文件...")
         self.btn_action.config(state="disabled", bg="#cccccc")
         
-        # 显示进度条
+        # 显示进度条（在 media_frame 之前）
         self.progress["value"] = 0
         self.progress["mode"] = "determinate"
         self.lbl_progress.config(text="准备中...")
-        self.progress_frame.pack(fill="x", before=self.tree_frame, padx=25, pady=(0, 15))
+        self.progress_frame.pack(fill="x", before=self.media_frame, padx=25, pady=(0, 15))
         
         # 清空缓存
         self.media_files_cache = []
