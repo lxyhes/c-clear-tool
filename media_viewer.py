@@ -157,7 +157,7 @@ class MediaViewer:
         for item in self.tree.get_children():
             self.tree.delete(item)
         
-        # 清空 ID 映射（重新生成）
+        # 重新生成 ID 系统 - 每次刷新都重新分配 ID
         self.id_counter = 0
         self.id_to_path = {}
         self.path_to_id = {}
