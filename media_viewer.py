@@ -159,6 +159,9 @@ class MediaViewer:
             # 添加文件节点
             for file_info in files:
                 self.add_file_node(dir_node, file_info)
+            
+            # 自动展开目录
+            self.tree.item(dir_node, open=True)
         
         # 更新复选框显示
         self.update_checkboxes()
