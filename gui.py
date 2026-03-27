@@ -717,6 +717,18 @@ class CleanerGUI:
         self.node_map = {}
         self.size_stats = {}
         self.total_scan_size = 0
+        
+        # 根据模式配置 tree 列
+        if self.current_mode == "media":
+            self.tree.configure(show="tree headings")
+            self.tree["columns"] = ("size", "path")
+            self.tree.heading("#0", text="文件名")
+            self.tree.heading("size", text="大小")
+            self.tree.heading("path", text="路径")
+            self.tree.column("#0", width=200)
+            self.tree.column("size", width=100)
+            self.tree.column("path", width=500)
+        
         self.lbl_title.config(text="正在分析中...")
         self.btn_action.config(state="disabled", bg="#cccccc")
         
@@ -786,6 +798,18 @@ class CleanerGUI:
                         self.add_space_analysis_node(data)
                     elif self.current_mode in ["junk", "social", "custom", "resign", "duplicate", "empty", "shortcut", "game", "phone", "browser_ext", "clipboard"]:
                         self.add_junk_node(data)
+                    elif self.current_mode == "media":
+                        # 媒体文件检测结果显示
+                        cat = data.get('cat', '')
+                        if '图片' in cat or '视频' in cat:
+                            tag = self.get_size_tag(data['raw_size'])
+                            icon = "🖼️" if '图片' in cat else "🎬"
+                            self.tree.insert("", "end", text=f"{icon} {data['detail']}", 
+                                           values=(data['display_size'], data['path']), tags=(tag,))
+                        elif '统计' in cat:
+                            # 统计信息用特殊颜色显示
+                            self.tree.insert("", "end", text=f"📊 {data['detail']}", 
+                                           values=(data['display_size'], ""), tags=("summary",))
                     elif self.current_mode == "inst":
                         tag = self.get_size_tag(data['raw_size'])
                         self.tree.insert("", "end", values=(data['date'], data['name'], data['path'], data['display_size']), tags=(tag,))
@@ -805,6 +829,14 @@ class CleanerGUI:
                         else:
                             self.lbl_title.config(text=f"C盘空间分析完成 - 共 {total_items} 个目录")
                             self.btn_action.config(text="重新分析", state="normal", bg=self.colors["accent"])
+                    elif self.current_mode == "media":
+                        # 媒体文件扫描完成
+                        total_items = len(self.tree.get_children())
+                        if total_items == 0:
+                            self.lbl_title.config(text="未找到图片或视频文件")
+                        else:
+                            self.lbl_title.config(text=f"扫描完成 - 共发现 {total_items} 个媒体文件")
+                        self.btn_action.config(text="重新扫描", state="normal", bg=self.colors["accent"])
                     elif self.current_mode in ["junk", "social", "custom", "resign", "duplicate", "empty", "shortcut", "game", "phone", "browser_ext", "clipboard"]:
                         if self.total_scan_size == 0:
                             self.lbl_title.config(text="系统很干净")
