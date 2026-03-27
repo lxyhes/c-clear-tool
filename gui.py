@@ -98,6 +98,7 @@ class CleanerGUI:
             self.menu.insert("", "end", text=f"  {self.icons['chat']}  社交专清"): "social",
             self.menu.insert("", "end", text=f"  {self.icons['fire']}  离职专清"): "resign",
             self.menu.insert("", "end", text=f"  {self.icons['folder']}  自定义扫描"): "custom",
+            self.menu.insert("", "end", text=f"  📷  媒体文件检测"): "media",
             self.menu.insert("", "end", text=f"  {self.icons['box']}  安装包清理"): "inst",
             self.menu.insert("", "end", text=f"  {self.icons['search']}  大文件雷达"): "large",
             self.menu.insert("", "end", text=f"  🔄  重复文件"): "duplicate",
@@ -221,9 +222,41 @@ class CleanerGUI:
             if path not in self.custom_paths:
                 self.custom_paths.append(path)
                 self.save_custom_paths()
-                if self.current_mode in ["custom", "resign"]:
+                # 刷新标题
+                if self.current_mode in ["custom", "resign", "media"]:
                     count = len(self.custom_paths)
-                    self.lbl_title.config(text=f"已添加 {count} 个敏感目录" if self.current_mode == "resign" else f"已添加 {count} 个目录")
+                    if self.current_mode == "resign":
+                        self.lbl_title.config(text=f"已添加 {count} 个敏感目录")
+                    elif self.current_mode == "media":
+                        self.lbl_title.config(text=f"已添加 {count} 个媒体目录")
+                    else:
+                        self.lbl_title.config(text=f"已添加 {count} 个目录")
+                # 刷新 tree 显示
+                self.refresh_custom_paths_display()
+    
+    def refresh_custom_paths_display(self):
+        """刷新已添加目录的显示"""
+        if self.current_mode not in ["custom", "resign", "media"]:
+            return
+        
+        # 清空 tree
+        self.tree.delete(*self.tree.get_children())
+        
+        # 设置列标题
+        self.tree.heading("#0", text="已添加的目录")
+        self.tree.heading("col_size", text="路径")
+        self.tree.heading("col_type", text="操作")
+        self.tree.column("col_size", width=400)
+        self.tree.column("col_type", width=80)
+        
+        # 显示已添加的目录
+        if self.custom_paths:
+            for i, path in enumerate(self.custom_paths):
+                item_id = f"path_{i}"
+                self.tree.insert("", "end", iid=item_id, text=f"📁 {os.path.basename(path)}", 
+                                values=(path, "删除"))
+        else:
+            self.tree.insert("", "end", text="请点击「添加目录」按钮添加扫描目录", values=("", ""))
 
     def on_expand_all(self):
         """全部展开树节点"""
@@ -307,19 +340,41 @@ class CleanerGUI:
         self.btn_collapse_all.pack_forget()
         self.chk_deep_scan.pack_forget()
         
-        if self.current_mode in ["custom", "resign"]:
+        if self.current_mode in ["custom", "resign", "media"]:
             self.btn_add_path.pack(side="left")
             count = len(self.custom_paths)
-            self.lbl_title.config(text=f"已添加 {count} 个敏感目录" if self.current_mode == "resign" else f"已添加 {count} 个目录")
+            if self.current_mode == "resign":
+                self.lbl_title.config(text=f"已添加 {count} 个敏感目录")
+            elif self.current_mode == "media":
+                self.lbl_title.config(text=f"已添加 {count} 个媒体目录")
+            else:
+                self.lbl_title.config(text=f"已添加 {count} 个目录")
             # 仅在自定义扫描模式下显示深度扫描选项
             if self.current_mode == "custom":
                 self.chk_deep_scan.pack(side="left", padx=(0, 8))
+            
+            # 显示已添加的目录列表
+            if self.custom_paths:
+                self.tree.heading("#0", text="已添加的目录")
+                self.tree.heading("col_size", text="路径")
+                self.tree.heading("col_type", text="操作")
+                self.tree.column("col_size", width=400)
+                self.tree.column("col_type", width=80)
+                for i, path in enumerate(self.custom_paths):
+                    item_id = f"path_{i}"
+                    self.tree.insert("", "end", iid=item_id, text=f"📁 {os.path.basename(path)}", 
+                                    values=(path, "删除"))
+            else:
+                self.tree.heading("#0", text="提示")
+                self.tree.heading("col_size", text="说明")
+                self.tree.heading("col_type", text="")
+                self.tree.insert("", "end", text="请点击「添加目录」按钮添加扫描目录", values=("", ""))
         
-        if self.current_mode in ["junk", "social", "custom", "resign", "inst", "large", "duplicate", "empty", "shortcut", "game", "phone", "browser_ext", "clipboard", "space"]:
+        if self.current_mode in ["junk", "social", "custom", "resign", "media", "inst", "large", "duplicate", "empty", "shortcut", "game", "phone", "browser_ext", "clipboard", "space"]:
             self.btn_backup.pack(side="left", padx=(0, 8))
         
         # 树形结构模式下显示展开/收起按钮
-        if self.current_mode in ["junk", "social", "custom", "resign", "duplicate", "empty", "shortcut", "game", "phone", "browser_ext", "clipboard", "space"]:
+        if self.current_mode in ["junk", "social", "custom", "resign", "media", "duplicate", "empty", "shortcut", "game", "phone", "browser_ext", "clipboard", "space"]:
             self.btn_expand_all.pack(side="left", padx=(0, 4))
             self.btn_collapse_all.pack(side="left", padx=(0, 8))
 
@@ -517,12 +572,35 @@ class CleanerGUI:
         tk.Button(btn_frame, text="删除选中", command=remove_path).pack(side="left", padx=5)
 
     def on_double_click(self, event):
-        """双击预览文件列表或展开空间分析目录"""
+        """双击预览文件列表、展开空间分析目录或删除自定义路径"""
         if self.current_mode == "settings":
             return
         
         item = self.tree.identify_row(event.y)
-        if not item or item not in self.node_map: 
+        if not item:
+            return
+        
+        # 在 custom、resign、media 模式下，双击删除目录
+        if self.current_mode in ["custom", "resign", "media"]:
+            if item.startswith("path_"):
+                idx = int(item.split("_")[1])
+                if 0 <= idx < len(self.custom_paths):
+                    path = self.custom_paths[idx]
+                    if messagebox.askyesno("确认", f"确定要从列表中删除此目录吗？\n\n{path}"):
+                        self.custom_paths.pop(idx)
+                        self.save_custom_paths()
+                        # 刷新显示
+                        count = len(self.custom_paths)
+                        if self.current_mode == "resign":
+                            self.lbl_title.config(text=f"已添加 {count} 个敏感目录")
+                        elif self.current_mode == "media":
+                            self.lbl_title.config(text=f"已添加 {count} 个媒体目录")
+                        else:
+                            self.lbl_title.config(text=f"已添加 {count} 个目录")
+                        self.refresh_custom_paths_display()
+                return
+        
+        if item not in self.node_map: 
             # 空间分析模式下处理展开
             if self.current_mode == "space":
                 self.toggle_space_expand(item)
@@ -624,7 +702,7 @@ class CleanerGUI:
         if self.btn_action['text'] == "立即清理":
             self.clean_selected()
             return
-        if self.current_mode == "custom" and not self.custom_paths:
+        if self.current_mode in ["custom", "media"] and not self.custom_paths:
             messagebox.showwarning("提示", "请先添加扫描目录。\n")
             return
         self.tree.delete(*self.tree.get_children())
@@ -654,6 +732,7 @@ class CleanerGUI:
                 gen = self.cleaner.scan_custom_deep(self.custom_paths)
             else:
                 gen = self.cleaner.scan_custom(self.custom_paths)
+        elif self.current_mode == "media": gen = self.cleaner.scan_media_files(self.custom_paths)
         elif self.current_mode == "inst": gen = self.cleaner.scan_installers()
         elif self.current_mode == "large": gen = self.cleaner.scan_large_files()
         elif self.current_mode == "duplicate": gen = self.cleaner.scan_duplicate_files()

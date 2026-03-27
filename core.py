@@ -998,6 +998,135 @@ class SystemCleaner:
         else:
             return "垃圾文件"
 
+    def scan_media_files(self, paths, min_size=0):
+        """扫描指定目录下的图片和视频文件
+        
+        Args:
+            paths: 要扫描的路径列表
+            min_size: 最小文件大小（字节），0表示不限制
+        """
+        self.scan_progress["start_time"] = time.time()
+        self.scan_progress["current"] = 0
+        self.scan_progress["total"] = len(paths)
+        
+        # 图片和视频文件扩展名
+        image_exts = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg', '.ico', 
+                      '.tiff', '.tif', '.raw', '.cr2', '.nef', '.heic', '.heif', '.avif'}
+        video_exts = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v',
+                      '.mpg', '.mpeg', '.3gp', '.ts', '.m2ts', '.vob', '.ogv', '.rmvb'}
+        
+        media_exts = image_exts | video_exts
+        
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futures = [ex.submit(self._scan_single_media_path, p, media_exts, image_exts, video_exts, min_size) 
+                      for p in paths]
+            for fut in as_completed(futures):
+                self.scan_progress["current"] += 1
+                yield {"type": "progress", "current": self.scan_progress["current"], 
+                       "total": self.scan_progress["total"], "start_time": self.scan_progress["start_time"]}
+                for item in fut.result(): yield item
+
+    def _scan_single_media_path(self, base, media_exts, image_exts, video_exts, min_size):
+        """扫描单个路径下的媒体文件"""
+        res = []
+        if not os.path.exists(base): return res
+        
+        base_sep_count = base.count(os.sep)
+        image_stats = {'count': 0, 'size': 0}
+        video_stats = {'count': 0, 'size': 0}
+        
+        # 使用栈进行深度优先遍历
+        stack = [(base, 0)]
+        
+        while stack:
+            current_path, current_depth = stack.pop()
+            
+            try:
+                entries = list(os.scandir(current_path))
+            except (PermissionError, OSError):
+                continue
+            
+            # 分离文件和目录
+            files = []
+            subdirs = []
+            for entry in entries:
+                try:
+                    if entry.is_file(follow_symlinks=False):
+                        files.append(entry)
+                    elif entry.is_dir(follow_symlinks=False):
+                        subdirs.append(entry)
+                except (OSError, PermissionError):
+                    continue
+            
+            # 将子目录压入栈
+            for subdir in reversed(subdirs):
+                stack.append((subdir.path, current_depth + 1))
+            
+            # 处理文件
+            for entry in files:
+                try:
+                    stat = entry.stat(follow_symlinks=False)
+                    sz = stat.st_size
+                    
+                    # 跳过小于最小大小的文件
+                    if sz < min_size:
+                        continue
+                    
+                    ext = os.path.splitext(entry.name)[1].lower()
+                    
+                    if ext in media_exts:
+                        is_image = ext in image_exts
+                        is_video = ext in video_exts
+                        
+                        if is_image:
+                            cat = "图片文件"
+                            image_stats['count'] += 1
+                            image_stats['size'] += sz
+                        else:
+                            cat = "视频文件"
+                            video_stats['count'] += 1
+                            video_stats['size'] += sz
+                        
+                        res.append({"type": "item", "data": {
+                            "cat": cat,
+                            "soft": os.path.basename(base),
+                            "detail": entry.name,
+                            "path": entry.path,
+                            "raw_size": sz,
+                            "display_size": format_size(sz),
+                            "depth": current_depth
+                        }})
+                
+                except (OSError, PermissionError):
+                    continue
+        
+        # 添加统计信息
+        if image_stats['count'] > 0:
+            res.append({"type": "item", "data": {
+                "cat": "图片统计",
+                "soft": os.path.basename(base),
+                "detail": f"共发现 {image_stats['count']} 个图片文件，总大小 {format_size(image_stats['size'])}",
+                "path": base,
+                "raw_size": image_stats['size'],
+                "display_size": format_size(image_stats['size']),
+                "depth": 0,
+                "is_summary": True
+            }})
+        
+        if video_stats['count'] > 0:
+            res.append({"type": "item", "data": {
+                "cat": "视频统计",
+                "soft": os.path.basename(base),
+                "detail": f"共发现 {video_stats['count']} 个视频文件，总大小 {format_size(video_stats['size'])}",
+                "path": base,
+                "raw_size": video_stats['size'],
+                "display_size": format_size(video_stats['size']),
+                "depth": 0,
+                "is_summary": True
+            }})
+        
+        return res
+
     def scan_custom_deep(self, paths):
         """深度自定义扫描 - 使用新的全面扫描算法，无深度限制，检测更多垃圾"""
         # 调用新的 scan_custom，参数设置为深度扫描模式
