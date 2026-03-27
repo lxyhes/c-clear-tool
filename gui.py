@@ -765,8 +765,7 @@ class CleanerGUI:
         # 创建 MediaViewer
         self.media_viewer = MediaViewer(
             self.tree_frame,
-            on_select=self.on_media_select,
-            on_double_click=self.on_media_double_click
+            on_delete_callback=self.on_media_deleted
         )
         
         self.lbl_title.config(text="正在扫描媒体文件...")
@@ -812,7 +811,6 @@ class CleanerGUI:
                     cat = data.get('cat', '')
                     # 只收集图片和视频文件（不包括统计信息）
                     if '图片' in cat or '视频' in cat:
-                        import time
                         file_info = {
                             'name': data['detail'],
                             'path': data['path'],
@@ -838,7 +836,7 @@ class CleanerGUI:
                         self.lbl_title.config(text=f"扫描完成 - 共发现 {total} 个媒体文件 ({utils.format_size(total_size)})")
                     
                     self.btn_action.config(text="重新扫描", state="normal", bg=self.colors["accent"])
-                    self.status_bar.config(text="  扫描完成")
+                    self.status_bar.config(text="  扫描完成 - 支持按目录分组查看和选择删除")
                     return
                     
         except Empty:
@@ -846,18 +844,24 @@ class CleanerGUI:
         
         self.root.after(20, self.consume_media_queue)
 
-    def on_media_select(self, file_info):
-        """媒体文件选择事件"""
-        self.status_bar.config(text=f"  选中: {file_info['path']}")
-
-    def on_media_double_click(self, file_info):
-        """媒体文件双击事件 - 打开文件"""
-        path = file_info['path']
-        if os.path.exists(path):
-            if os.path.isfile(path):
-                subprocess.run(['explorer', '/select,', path])
-            else:
-                os.startfile(path)
+    def on_media_deleted(self):
+        """媒体文件删除后的回调"""
+        # 刷新显示
+        if self.media_viewer:
+            self.media_viewer.refresh_file_list()
+            self.update_media_stats()
+    
+    def update_media_stats(self):
+        """更新媒体文件统计"""
+        if not self.media_viewer:
+            return
+        
+        selected_files = self.media_viewer.get_selected_files()
+        remaining_count = len(self.media_viewer.media_files_by_dir)
+        
+        total_files = sum(len(files) for files in self.media_viewer.media_files_by_dir.values())
+        
+        self.lbl_title.config(text=f"媒体文件检测 - 共 {total_files} 个文件，选中 {len(selected_files)} 个")
 
     def thread_scan(self):
         gen = None
