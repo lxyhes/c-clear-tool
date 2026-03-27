@@ -768,11 +768,20 @@ class CleanerGUI:
             self.media_viewer.destroy()
             self.media_viewer = None
         
+        self.lbl_title.config(text="正在扫描媒体文件...")
+        self.btn_action.config(state="disabled", bg="#cccccc")
+        
+        # 显示进度条
+        self.progress["value"] = 0
+        self.progress["mode"] = "determinate"
+        self.lbl_progress.config(text="准备中...")
+        self.progress_frame.pack(fill="x", padx=25, pady=(0, 15))
+        
         # 如果 media_frame 不存在，创建它
         if not self.media_frame:
             self.media_frame = tk.Frame(self.tree_frame.master, bg="white", padx=25, pady=0)
         
-        # 显示 media_frame
+        # 显示 media_frame（在进度条之后）
         self.media_frame.pack(fill="both", expand=True)
         
         # 创建 MediaViewer（在 media_frame 内部）
@@ -780,15 +789,6 @@ class CleanerGUI:
             self.media_frame,
             on_delete_callback=self.on_media_deleted
         )
-        
-        self.lbl_title.config(text="正在扫描媒体文件...")
-        self.btn_action.config(state="disabled", bg="#cccccc")
-        
-        # 显示进度条（在 media_frame 之前）
-        self.progress["value"] = 0
-        self.progress["mode"] = "determinate"
-        self.lbl_progress.config(text="准备中...")
-        self.progress_frame.pack(fill="x", before=self.media_frame, padx=25, pady=(0, 15))
         
         # 清空缓存
         self.media_files_cache = []
