@@ -130,16 +130,23 @@ class MediaViewer:
         
     def set_media_files(self, files):
         """设置媒体文件列表并按目录分组"""
-        # 按目录分组
+        # 按目录分组，使用路径去重
+        seen_paths = set()
         self.media_files_by_dir = {}
         for file_info in files:
-            dir_path = os.path.dirname(file_info['path'])
+            file_path = file_info['path']
+            # 跳过重复的文件
+            if file_path in seen_paths:
+                continue
+            seen_paths.add(file_path)
+            
+            dir_path = os.path.dirname(file_path)
             if dir_path not in self.media_files_by_dir:
                 self.media_files_by_dir[dir_path] = []
             self.media_files_by_dir[dir_path].append(file_info)
             # 初始化选中状态
-            if file_info['path'] not in self.selected_files:
-                self.selected_files[file_info['path']] = False
+            if file_path not in self.selected_files:
+                self.selected_files[file_path] = False
         
         self.refresh_display()
         self.update_stats()
@@ -162,11 +169,23 @@ class MediaViewer:
             # 生成安全的目录 ID
             dir_id = self.generate_id(dir_path)
             
-            # 添加目录节点
-            dir_node = self.tree.insert("", "end", iid=dir_id, 
-                                       text=f"📁 {dir_name} ({len(files)}个文件)",
-                                       values=("目录", self.format_size(total_size), dir_path),
-                                       tags=("directory", dir_path))
+            # 检查目录 ID 是否已存在
+            try:
+                existing = self.tree.item(dir_id)
+                if existing:
+                    dir_node = dir_id
+                else:
+                    raise Exception("not exists")
+            except:
+                # 添加目录节点
+                try:
+                    dir_node = self.tree.insert("", "end", iid=dir_id, 
+                                               text=f"📁 {dir_name} ({len(files)}个文件)",
+                                               values=("目录", self.format_size(total_size), dir_path),
+                                               tags=("directory", dir_path))
+                except Exception as e:
+                    print(f"添加目录节点失败: {e}")
+                    continue
             
             # 添加文件节点
             for idx, file_info in enumerate(files):
@@ -189,11 +208,26 @@ class MediaViewer:
         # 生成安全的文件 ID
         file_id = self.generate_id(file_path)
         
+        # 检查 ID 是否已存在
+        try:
+            existing = self.tree.item(file_id)
+            if existing:
+                # ID 已存在，跳过
+                return
+        except:
+            # ID 不存在，继续添加
+            pass
+        
         # 添加节点
-        self.tree.insert(parent, "end", iid=file_id,
-                        text=f"{icon} {file_info['name']}",
-                        values=(file_info['type'], file_info['display_size'], file_path),
-                        tags=("file", file_path))
+        try:
+            self.tree.insert(parent, "end", iid=file_id,
+                            text=f"{icon} {file_info['name']}",
+                            values=(file_info['type'], file_info['display_size'], file_path),
+                            tags=("file", file_path))
+        except Exception as e:
+            # 如果添加失败（比如 ID 冲突），忽略错误
+            print(f"添加节点失败: {e}")
+            pass
         
     def update_checkboxes(self):
         """更新所有复选框的显示状态"""
