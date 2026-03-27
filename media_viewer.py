@@ -25,11 +25,27 @@ class MediaViewer:
         # 选中的文件 {文件路径: 是否选中}
         self.selected_files = {}
         
+        # ID 映射 {安全ID: 真实路径}
+        self.id_counter = 0
+        self.id_to_path = {}
+        self.path_to_id = {}
+        
         # 线程池
         self.executor = ThreadPoolExecutor(max_workers=4)
         
         # 创建UI
         self.setup_ui()
+        
+    def generate_id(self, path):
+        """生成安全的 Treeview ID"""
+        if path in self.path_to_id:
+            return self.path_to_id[path]
+        
+        self.id_counter += 1
+        safe_id = f"item_{self.id_counter}"
+        self.path_to_id[path] = safe_id
+        self.id_to_path[safe_id] = path
+        return safe_id
         
     def setup_ui(self):
         """创建用户界面"""
@@ -141,6 +157,11 @@ class MediaViewer:
         for item in self.tree.get_children():
             self.tree.delete(item)
         
+        # 清空 ID 映射（重新生成）
+        self.id_counter = 0
+        self.id_to_path = {}
+        self.path_to_id = {}
+        
         # 按目录添加文件
         for dir_path, files in sorted(self.media_files_by_dir.items()):
             if not files:
@@ -150,15 +171,18 @@ class MediaViewer:
             total_size = sum(f['size'] for f in files)
             dir_name = os.path.basename(dir_path) or dir_path
             
+            # 生成安全的目录 ID
+            dir_id = self.generate_id(dir_path)
+            
             # 添加目录节点
-            dir_node = self.tree.insert("", "end", iid=dir_path, 
+            dir_node = self.tree.insert("", "end", iid=dir_id, 
                                        text=f"📁 {dir_name} ({len(files)}个文件)",
                                        values=("目录", self.format_size(total_size), dir_path),
-                                       tags=("directory",))
+                                       tags=("directory", dir_path))
             
             # 添加文件节点
-            for file_info in files:
-                self.add_file_node(dir_node, file_info)
+            for idx, file_info in enumerate(files):
+                self.add_file_node(dir_node, file_info, idx)
             
             # 自动展开目录
             self.tree.item(dir_node, open=True)
@@ -166,7 +190,7 @@ class MediaViewer:
         # 更新复选框显示
         self.update_checkboxes()
         
-    def add_file_node(self, parent, file_info):
+    def add_file_node(self, parent, file_info, index=0):
         """添加文件节点"""
         file_path = file_info['path']
         is_selected = self.selected_files.get(file_path, False)
@@ -174,9 +198,11 @@ class MediaViewer:
         # 确定图标
         icon = "🖼️" if file_info['type'] == '图片' else "🎬"
         
-        # 添加节点（先不加图片，后面统一更新）
-        item_id = f"file_{file_path}"
-        self.tree.insert(parent, "end", iid=item_id,
+        # 生成安全的文件 ID
+        file_id = self.generate_id(file_path)
+        
+        # 添加节点
+        self.tree.insert(parent, "end", iid=file_id,
                         text=f"{icon} {file_info['name']}",
                         values=(file_info['type'], file_info['display_size'], file_path),
                         tags=("file", file_path))
@@ -271,7 +297,8 @@ class MediaViewer:
                 import subprocess
                 subprocess.run(['explorer', '/select,', file_path])
         elif tags[0] == "directory":
-            dir_path = item_id
+            # 从 tags 中获取目录路径
+            dir_path = tags[1]
             if os.path.exists(dir_path):
                 os.startfile(dir_path)
                 
