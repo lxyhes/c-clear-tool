@@ -35,6 +35,7 @@ class CleanerGUI:
         # 媒体文件查看器
         self.media_viewer = None
         self.media_files_cache = []
+        self.media_frame = None  # 专门给 MediaViewer 使用的容器
         
         self.icons = utils.get_icons()
         self.setup_style()
@@ -339,8 +340,13 @@ class CleanerGUI:
         if self.media_viewer:
             self.media_viewer.destroy()
             self.media_viewer = None
-            # 重新显示 tree_frame
-            self.tree_frame.pack(fill="both", expand=True, padx=25, pady=0)
+        
+        # 隐藏 media_frame（如果存在）
+        if self.media_frame:
+            self.media_frame.pack_forget()
+        
+        # 重新显示 tree_frame（默认显示）
+        self.tree_frame.pack(fill="both", expand=True, padx=25, pady=0)
         
         self.current_mode = self.menu_items[sel[0]]
         self.tree.delete(*self.tree.get_children())
@@ -754,17 +760,24 @@ class CleanerGUI:
         # 清空之前的显示
         self.tree.delete(*self.tree.get_children())
         
+        # 隐藏默认的 tree_frame
+        self.tree_frame.pack_forget()
+        
         # 如果 MediaViewer 已存在，先销毁
         if self.media_viewer:
             self.media_viewer.destroy()
             self.media_viewer = None
         
-        # 确保 tree_frame 是可见的
-        self.tree_frame.pack(fill="both", expand=True, padx=25, pady=0)
+        # 如果 media_frame 不存在，创建它
+        if not self.media_frame:
+            self.media_frame = tk.Frame(self.tree_frame.master, bg="white", padx=25, pady=0)
         
-        # 创建 MediaViewer（在 tree_frame 内部）
+        # 显示 media_frame
+        self.media_frame.pack(fill="both", expand=True)
+        
+        # 创建 MediaViewer（在 media_frame 内部）
         self.media_viewer = MediaViewer(
-            self.tree_frame,
+            self.media_frame,
             on_delete_callback=self.on_media_deleted
         )
         
